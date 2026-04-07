@@ -12,10 +12,11 @@ class Jackin < Formula
   conflicts_with "jackin-project/tap/jackin-preview", because: "stable and preview install the same binary"
 
   def install
+    ENV["JACKIN_VERSION_OVERRIDE"] = version.to_s
     system "cargo", "install", *std_cargo_args
   end
 
   test do
-    assert_match "jackin", shell_output("#{bin}/jackin --version")
+    assert_match version.to_s, shell_output("#{bin}/jackin --version")
   end
 end
