@@ -1,15 +1,15 @@
-class Jackin < Formula
+class JackinPreview < Formula
   desc "Matrix-inspired CLI for orchestrating AI coding agents at scale"
   homepage "https://github.com/jackin-project/jackin"
-  url "https://github.com/jackin-project/jackin/archive/refs/tags/v0.4.0.tar.gz"
-  sha256 "f28a180a1039e15e1525e7e2c0b7b3aa556d3ff15152cb91048aff4cdcff6b95"
+  url "https://github.com/jackin-project/jackin/archive/fde8258757682b8cc1915e06865d70b23399be70.tar.gz"
+  version "0.5.0-preview+fde8258"
+  sha256 "196cb685951251610cdc2f535c9c503838c91a98d410b1418ec8868560da1ea0"
   license "Apache-2.0"
-  head "https://github.com/jackin-project/jackin.git", branch: "main"
 
   depends_on "rust" => :build
   depends_on "docker" => :optional
 
-  conflicts_with "jackin-project/tap/jackin-preview", because: "stable and preview install the same binary"
+  conflicts_with "jackin-project/tap/jackin", because: "preview and stable install the same binary"
 
   def install
     system "cargo", "install", *std_cargo_args
