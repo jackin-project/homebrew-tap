@@ -1,9 +1,9 @@
 class JackinPreview < Formula
   desc "Matrix-inspired CLI for orchestrating AI coding agents at scale"
   homepage "https://github.com/jackin-project/jackin"
-  url "https://github.com/jackin-project/jackin/archive/1b54dfa44a000c9cbbd56cf503a9ba5e63771154.tar.gz"
-  version "0.5.0-preview.286+1b54dfa"
-  sha256 "8ce1a79025ad0c6653da433d6c3a49d245bf541ca8ca9c7a76005a60395b09d4"
+  url "https://github.com/jackin-project/jackin/archive/23f22ae3fde24e2cb92d79e3c7c0484cc3054998.tar.gz"
+  version "0.5.0-preview.288+23f22ae"
+  sha256 "bd6ca88e18c3e9c03c1669a1d1049bd73fa310b9513d14c94589ea50a6f07726"
   license "Apache-2.0"
 
   depends_on "rust" => :build
