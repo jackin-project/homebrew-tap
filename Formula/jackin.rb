@@ -1,8 +1,8 @@
 class Jackin < Formula
   desc "Matrix-inspired CLI for orchestrating AI coding agents at scale"
   homepage "https://github.com/jackin-project/jackin"
-  url "https://github.com/jackin-project/jackin/archive/refs/tags/v0.4.0.tar.gz"
-  sha256 "f28a180a1039e15e1525e7e2c0b7b3aa556d3ff15152cb91048aff4cdcff6b95"
+  url "https://github.com/jackin-project/jackin/archive/refs/tags/v0.5.0.tar.gz"
+  sha256 "c758fff9d41670d208498da32531b70e7ce5f00735d31eef6e2fb8fa355bc775"
   license "Apache-2.0"
   head "https://github.com/jackin-project/jackin.git", branch: "main"
 
