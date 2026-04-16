@@ -42,13 +42,22 @@ git diff --cached --name-only -z | xargs -0 -r \
 
 ## Upstream tag protection
 
-Every formula pins to an artifact on `github.com/jackin-project/jackin`. That repo's ruleset must be intact for these formulas to remain trustworthy. Verify periodically:
+Every formula pins to an artifact on `github.com/jackin-project/jackin`. That repo's rulesets must be intact for these formulas to remain trustworthy. Verify periodically:
 
 ```bash
-gh api repos/jackin-project/jackin/rulesets --jq '.[] | {name, target, enforcement}'
+gh api repos/jackin-project/jackin/rulesets --jq '[.[] | {name, target, enforcement}]'
 ```
 
-Expect at least one ruleset with `target: branch, enforcement: active` covering `~DEFAULT_BRANCH`. Ideally a parallel tag ruleset covering `refs/tags/v*` as well — if that's absent, tag force-moves are a silent supply-chain risk.
+Expected (as of 2026-04-16, applied via `jackin-github-terraform` Terraform config):
+
+```json
+[
+  {"name": "protect-main", "target": "branch", "enforcement": "active"},
+  {"name": "protect-tags", "target": "tag",    "enforcement": "active"}
+]
+```
+
+The `protect-tags` ruleset covers `~ALL` tag names with `non_fast_forward = true` and `deletion = true` — so no tag can be force-moved or deleted once created. If that ruleset ever goes missing or falls to `enforcement: disabled`, treat it as an incident: tag force-moves become a silent supply-chain risk, since every `brew install jackin@v0.5.0` trusts whatever commit the tag currently points at.
 
 ## Who commits here
 
