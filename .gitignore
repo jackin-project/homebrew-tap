@@ -1,0 +1,10 @@
+# Editor/tool local state
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Homebrew local test artifacts (brew install/test normally writes to /tmp,
+# but occasionally lands in the tap dir on failure)
+*.bottle.tar.gz
+*.bottle.json
