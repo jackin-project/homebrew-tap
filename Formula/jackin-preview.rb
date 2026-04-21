@@ -1,5 +1,5 @@
 class JackinPreview < Formula
-  desc "Matrix-inspired CLI for orchestrating AI coding agents at scale"
+  desc "CLI for orchestrating AI coding agents in Docker containers at scale"
   homepage "https://github.com/jackin-project/jackin"
   url "https://github.com/jackin-project/jackin/archive/23b81129870fb11a7e78294249ba6e9d7ac33ed1.tar.gz"
   version "0.6.0-preview.429+23b8112"
