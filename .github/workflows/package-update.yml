@@ -28,14 +28,15 @@ jobs:
       matrix:
         config: ${{ fromJSON(((github.event_name == 'workflow_dispatch' && inputs.lanes == 'both') || (github.event_name != 'workflow_dispatch' && vars.VELNOR_AUTOMATIC_LANES == 'both')) && '[{"lane":"velnor","writer":true},{"lane":"github","writer":false}]' || ((github.event_name == 'workflow_dispatch' && inputs.lanes == 'github') || (github.event_name != 'workflow_dispatch' && vars.VELNOR_AUTOMATIC_LANES == 'github')) && '[{"lane":"github","writer":true}]' || '[{"lane":"velnor","writer":true}]') }}
         channel: [stable, preview]
-    uses: jackin-project/velnor-actions/.github/workflows/package-updater.yml@cfb0c475b2f235ed0d2b9d5e40e52a9f4ff05986 # mt-2026.8.32
+    uses: jackin-project/velnor-actions/.github/workflows/package-updater.yml@29c9fc3fe21299cc2169730b7ba7251553611429 # 2026.8.33
     with:
       consumer-repository: ${{ github.repository }}
       channel: ${{ matrix.channel }}
       current-signer-digest: "eeb8a182174f3c97c370ecf3f1e3e4689ae22cfe"
-      old-signer-digest: "a1ff41d323ab0d87bcb6407e14aee406b32a6cb0"
-      old-signer-activated-at: "2026-08-24T00:00:00Z"
-      old-signer-expires-at: "2026-09-07T00:00:00Z"
+      signer-fork: "jackin-project"
+      old-signer-digest: ""
+      old-signer-activated-at: ""
+      old-signer-expires-at: ""
       branch: package-update/verified/${{ matrix.channel }}
       lane: ${{ matrix.config.lane }}
       writer: ${{ matrix.config.writer }}
@@ -48,14 +49,15 @@ jobs:
       matrix:
         config: ${{ fromJSON(((github.event_name == 'workflow_dispatch' && inputs.lanes == 'both') || (github.event_name != 'workflow_dispatch' && vars.VELNOR_AUTOMATIC_LANES == 'both')) && '[{"lane":"velnor","writer":true},{"lane":"github","writer":false}]' || ((github.event_name == 'workflow_dispatch' && inputs.lanes == 'github') || (github.event_name != 'workflow_dispatch' && vars.VELNOR_AUTOMATIC_LANES == 'github')) && '[{"lane":"github","writer":true}]' || '[{"lane":"velnor","writer":true}]') }}
         channel: [stable, preview]
-    uses: tailrocks/velnor-actions/.github/workflows/package-updater.yml@77d323dcfdb176b332edc24bfc92cb625b3ab4c8 # 2026.8.30
+    uses: tailrocks/velnor-actions/.github/workflows/package-updater.yml@8cf665c32d13f153523ae307604145d41eea19d1 # 2026.8.33
     with:
       consumer-repository: ${{ github.repository }}
       channel: ${{ matrix.channel }}
       current-signer-digest: "eeb8a182174f3c97c370ecf3f1e3e4689ae22cfe"
-      old-signer-digest: "a1ff41d323ab0d87bcb6407e14aee406b32a6cb0"
-      old-signer-activated-at: "2026-08-24T00:00:00Z"
-      old-signer-expires-at: "2026-09-07T00:00:00Z"
+      signer-fork: "jackin-project"
+      old-signer-digest: ""
+      old-signer-activated-at: ""
+      old-signer-expires-at: ""
       branch: package-update/verified/${{ matrix.channel }}
       lane: ${{ matrix.config.lane }}
       writer: ${{ matrix.config.writer }}
@@ -68,14 +70,15 @@ jobs:
       matrix:
         config: ${{ fromJSON(((github.event_name == 'workflow_dispatch' && inputs.lanes == 'both') || (github.event_name != 'workflow_dispatch' && vars.VELNOR_AUTOMATIC_LANES == 'both')) && '[{"lane":"velnor","writer":true},{"lane":"github","writer":false}]' || ((github.event_name == 'workflow_dispatch' && inputs.lanes == 'github') || (github.event_name != 'workflow_dispatch' && vars.VELNOR_AUTOMATIC_LANES == 'github')) && '[{"lane":"github","writer":true}]' || '[{"lane":"velnor","writer":true}]') }}
         channel: [stable, preview]
-    uses: ChainArgos/velnor-actions/.github/workflows/package-updater.yml@36d568abb89b4f53aa828fe1740fbb3411ffcb87 # 2026.8.30
+    uses: ChainArgos/velnor-actions/.github/workflows/package-updater.yml@10bcaaf56abac51240171c00b156c15dae91166a # 2026.8.33
     with:
       consumer-repository: ${{ github.repository }}
       channel: ${{ matrix.channel }}
       current-signer-digest: "eeb8a182174f3c97c370ecf3f1e3e4689ae22cfe"
-      old-signer-digest: "a1ff41d323ab0d87bcb6407e14aee406b32a6cb0"
-      old-signer-activated-at: "2026-08-24T00:00:00Z"
-      old-signer-expires-at: "2026-09-07T00:00:00Z"
+      signer-fork: "jackin-project"
+      old-signer-digest: ""
+      old-signer-activated-at: ""
+      old-signer-expires-at: ""
       branch: package-update/verified/${{ matrix.channel }}
       lane: ${{ matrix.config.lane }}
       writer: ${{ matrix.config.writer }}
