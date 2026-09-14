@@ -29,7 +29,7 @@ class JackinPreview < Formula
 
   resource "jackin-capsule-aarch64-unknown-linux-gnu" do
     url "https://github.com/jackin-project/jackin/releases/download/preview/jackin-capsule-aarch64-unknown-linux-gnu.tar.gz"
-    sha256 "6c24b131f74bb9574ab5e0670150da6d7ec17b006210fd5132dce148d40bace606b"
+    sha256 "6c24b131f74bb9574ab5e0670150da6d7ec17b006210fd5132dce148d40e606b"
   end
 
   resource "jackin-capsule-x86_64-unknown-linux-gnu" do
