@@ -33,7 +33,6 @@ jobs:
       consumer-repository: ${{ github.repository }}
       channel: ${{ matrix.channel }}
       current-signer-digest: "eeb8a182174f3c97c370ecf3f1e3e4689ae22cfe"
-      signer-fork: "jackin-project"
       old-signer-digest: ""
       old-signer-activated-at: ""
       old-signer-expires-at: ""
@@ -54,7 +53,6 @@ jobs:
       consumer-repository: ${{ github.repository }}
       channel: ${{ matrix.channel }}
       current-signer-digest: "eeb8a182174f3c97c370ecf3f1e3e4689ae22cfe"
-      signer-fork: "jackin-project"
       old-signer-digest: ""
       old-signer-activated-at: ""
       old-signer-expires-at: ""
@@ -75,7 +73,6 @@ jobs:
       consumer-repository: ${{ github.repository }}
       channel: ${{ matrix.channel }}
       current-signer-digest: "eeb8a182174f3c97c370ecf3f1e3e4689ae22cfe"
-      signer-fork: "jackin-project"
       old-signer-digest: ""
       old-signer-activated-at: ""
       old-signer-expires-at: ""
