@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.repository }}
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event_name == 'workflow_dispatch' && inputs.lanes || vars.VELNOR_AUTOMATIC_LANES || 'velnor' }}
   cancel-in-progress: false
 
 jobs:
