@@ -1,0 +1,6 @@
+error: invalid generation config /private/tmp/velnor-clean-room/jackin-project/homebrew-tap/.github-gen/velnor-workflow.toml: TOML parse error at line 4, column 1
+  |
+4 | revision = "92f933fdb7f84ef8d6e6eb3c1b5809d8231fbaea"
+  | ^^^^^^^^
+unknown field `revision`, expected `repository`
+
