@@ -1,13 +1,9 @@
 schema = 1
-
 [generator]
 repository = "jackin-project/homebrew-tap"
-
-# The scan's default `brew audit --strict --online` has no tap context on
-# GitHub-hosted Linuxbrew; run the repository's mise `check` task instead.
+revision = "2678913a8e3db842a2f92e82e2e1119fae7dad35"
 [scan]
 exclude = ["Formula/**", "Casks/**"]
-
 [workflow]
 runners = "github"
 automatic = "github"
@@ -16,10 +12,8 @@ automatic_lanes = "github"
 github_runner = "ubuntu-24.04"
 velnor_labels = ["self-hosted", "velnor-target-mvp"]
 default_branch = "main"
-
 [policy]
 ruleset_external_status_checks = ["DCO"]
-
 [[units]]
 id = "homebrew"
 kind = "homebrew"
@@ -27,11 +21,3 @@ root = "."
 watch = ["Formula/**", "Casks/**", "Brewfile", "mise.toml", "mise.lock", "scripts/**"]
 ci_tasks = ["check"]
 mise_tools = ["actionlint", "jq", "python", "uv", "pipx:reuse"]
-
-[[static_files]]
-file = ".github/workflows/ci-unit-homebrew.yml"
-source = ".github-gen/sources/workflows/ci-unit-homebrew.yml"
-
-[[static_files]]
-file = ".github/actions/report-velnor-ci-outcomes/action.yml"
-source = ".github-gen/sources/actions/report-velnor-ci-outcomes/action.yml"
