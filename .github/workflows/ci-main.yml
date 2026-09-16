@@ -194,7 +194,7 @@ jobs:
         working-directory: policy-checkout
         run: mise exec actionlint@1.7.12 -- actionlint
   github-homebrew:
-    name: "Homebrew · Homebrew"
+    name: "Homebrew · "
     if: ${{ always() && needs.plan.result == 'success' && needs.policy.result == 'success' && contains(format(',{0},', needs.plan.outputs.units), ',homebrew,') }}
     needs: [plan, policy]
     uses: ./.github/workflows/ci-unit-homebrew.yml

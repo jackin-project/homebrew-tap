@@ -22,11 +22,11 @@ reason = "Release is fail-closed. Enable only after declaring immutable artifact
 
 [[unit]]
 id = "homebrew"
-label = "Homebrew"
+label = ""
 kind = "homebrew"
 root = "."
-watch = ["Brewfile", "Casks/**", "Formula/**"]
-github_pr_commands = ["brew audit --strict --online"]
-github_full_commands = ["brew audit --strict --online"]
-velnor_pr_commands = ["brew audit --strict --online"]
-velnor_full_commands = ["brew audit --strict --online"]
+watch = ["Brewfile", "Casks/**", "Formula/**", "mise.lock", "mise.toml", "scripts/**"]
+github_pr_commands = ["mise run check"]
+github_full_commands = ["mise run check"]
+velnor_pr_commands = ["mise run check"]
+velnor_full_commands = ["mise run check"]

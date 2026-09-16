@@ -98,7 +98,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   github-homebrew:
-    name: "Homebrew · Homebrew"
+    name: "Homebrew · "
     if: ${{ always() && needs.plan.result == 'success' && contains(format(',{0},', needs.plan.outputs.units), ',homebrew,') }}
     needs: [plan]
     uses: ./.github/workflows/ci-unit-homebrew.yml
