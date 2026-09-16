@@ -1,7 +1,7 @@
 schema = 1
 [generator]
 repository = "jackin-project/homebrew-tap"
-revision = "5623be5539f2a378430fdcc7d4ba5cb13b5f1222"
+revision = "66cfa4fa8bcb3fb57c1599dfa657886aca4434ec"
 [scan]
 exclude = ["Formula/**", "Casks/**"]
 [workflow]
