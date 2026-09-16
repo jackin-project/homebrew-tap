@@ -2,7 +2,6 @@ schema = 1
 
 [generator]
 repository = "jackin-project/homebrew-tap"
-revision = "2c591728a70045dbfee49c9bb4ca0a4ee3612e74"
 
 # The scan's default `brew audit --strict --online` has no tap context on
 # GitHub-hosted Linuxbrew; run the repository's mise `check` task instead.
@@ -17,6 +16,9 @@ automatic_lanes = "github"
 github_runner = "ubuntu-24.04"
 velnor_labels = ["self-hosted", "velnor-target-mvp"]
 default_branch = "main"
+
+[policy]
+ruleset_external_status_checks = ["DCO"]
 
 [[units]]
 id = "homebrew"
