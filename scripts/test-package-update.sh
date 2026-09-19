@@ -5,6 +5,11 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 cp -R "$root/." "$tmp/repo"
+test "$(grep -cF 'releases/download/$VELNOR_PACKAGE_RELEASE_TAG/' "$root/scripts/package-update.sh")" -eq 6
+if grep -Fq 'releases/download/preview/' "$root/scripts/package-update.sh"; then
+  echo "preview release URLs must use VELNOR_PACKAGE_RELEASE_TAG" >&2
+  exit 1
+fi
 verified="$tmp/verified"
 mkdir "$verified"
 version=1.2.3
@@ -124,7 +129,7 @@ jq -Sn --arg source_repository jackin-project/jackin --arg source_ref refs/heads
 
 (
   cd "$tmp/repo"
-  VELNOR_PACKAGE_CHANNEL=preview VELNOR_VERIFIED_PACKAGE_DIR="$preview_verified" ./scripts/package-update.sh
+  VELNOR_PACKAGE_CHANNEL=preview VELNOR_PACKAGE_RELEASE_TAG=preview VELNOR_VERIFIED_PACKAGE_DIR="$preview_verified" ./scripts/package-update.sh
   grep -Fx "# source-sha: $commit" Formula/jackin-preview.rb
   grep -F "version \"$preview_version\"" Formula/jackin-preview.rb
   test "$(grep -cE 'sha256 \"[0-9a-f]{64}\"$' Formula/jackin-preview.rb)" -eq 6
@@ -134,12 +139,38 @@ jq -Sn --arg source_repository jackin-project/jackin --arg source_ref refs/heads
   shasum -a 256 Formula/jackin-preview.rb > "$tmp/preview.sha"
 )
 
+preview_missing_tag_verified="$tmp/preview-missing-tag-verified"
+cp -R "$preview_verified" "$preview_missing_tag_verified"
+if (
+  cd "$tmp/repo"
+  unset VELNOR_PACKAGE_RELEASE_TAG
+  VELNOR_PACKAGE_CHANNEL=preview VELNOR_VERIFIED_PACKAGE_DIR="$preview_missing_tag_verified" ./scripts/package-update.sh
+); then
+  echo "missing preview release tag was accepted" >&2
+  exit 1
+fi
+(
+  cd "$tmp/repo"
+  shasum -a 256 -c "$tmp/preview.sha"
+)
+
+preview_mismatched_tag_verified="$tmp/preview-mismatched-tag-verified"
+cp -R "$preview_verified" "$preview_mismatched_tag_verified"
+if (cd "$tmp/repo" && VELNOR_PACKAGE_CHANNEL=preview VELNOR_PACKAGE_RELEASE_TAG=preview-foreign VELNOR_VERIFIED_PACKAGE_DIR="$preview_mismatched_tag_verified" ./scripts/package-update.sh); then
+  echo "mismatched preview release tag was accepted" >&2
+  exit 1
+fi
+(
+  cd "$tmp/repo"
+  shasum -a 256 -c "$tmp/preview.sha"
+)
+
 preview_mismatch_verified="$tmp/preview-mismatch-verified"
 cp -R "$preview_verified" "$preview_mismatch_verified"
 jq '.manifest.source_commit = "fedcba9876543210fedcba9876543210fedcba98"' \
   "$preview_mismatch_verified/identity.json" > "$tmp/bad-preview-identity.json"
 mv "$tmp/bad-preview-identity.json" "$preview_mismatch_verified/identity.json"
-if (cd "$tmp/repo" && VELNOR_PACKAGE_CHANNEL=preview VELNOR_VERIFIED_PACKAGE_DIR="$preview_mismatch_verified" ./scripts/package-update.sh); then
+if (cd "$tmp/repo" && VELNOR_PACKAGE_CHANNEL=preview VELNOR_PACKAGE_RELEASE_TAG=preview VELNOR_VERIFIED_PACKAGE_DIR="$preview_mismatch_verified" ./scripts/package-update.sh); then
   echo "mismatched identity manifest was accepted" >&2
   exit 1
 fi
@@ -162,7 +193,7 @@ fi
 preview_missing_supporting_verified="$tmp/preview-missing-supporting-verified"
 cp -R "$preview_verified" "$preview_missing_supporting_verified"
 rm "$preview_missing_supporting_verified/SHA256SUMS"
-if (cd "$tmp/repo" && VELNOR_PACKAGE_CHANNEL=preview VELNOR_VERIFIED_PACKAGE_DIR="$preview_missing_supporting_verified" ./scripts/package-update.sh); then
+if (cd "$tmp/repo" && VELNOR_PACKAGE_CHANNEL=preview VELNOR_PACKAGE_RELEASE_TAG=preview VELNOR_VERIFIED_PACKAGE_DIR="$preview_missing_supporting_verified" ./scripts/package-update.sh); then
   echo "missing supporting asset was accepted" >&2
   exit 1
 fi
@@ -174,7 +205,7 @@ fi
 preview_extra_verified="$tmp/preview-extra-verified"
 cp -R "$preview_verified" "$preview_extra_verified"
 printf 'unexpected\n' > "$preview_extra_verified/unlisted-supporting.asset"
-if (cd "$tmp/repo" && VELNOR_PACKAGE_CHANNEL=preview VELNOR_VERIFIED_PACKAGE_DIR="$preview_extra_verified" ./scripts/package-update.sh); then
+if (cd "$tmp/repo" && VELNOR_PACKAGE_CHANNEL=preview VELNOR_PACKAGE_RELEASE_TAG=preview VELNOR_VERIFIED_PACKAGE_DIR="$preview_extra_verified" ./scripts/package-update.sh); then
   echo "extra supporting asset was accepted" >&2
   exit 1
 fi
@@ -186,7 +217,7 @@ fi
 preview_mismatched_supporting_verified="$tmp/preview-mismatched-supporting-verified"
 cp -R "$preview_verified" "$preview_mismatched_supporting_verified"
 printf 'tampered\n' >> "$preview_mismatched_supporting_verified/SHA256SUMS"
-if (cd "$tmp/repo" && VELNOR_PACKAGE_CHANNEL=preview VELNOR_VERIFIED_PACKAGE_DIR="$preview_mismatched_supporting_verified" ./scripts/package-update.sh); then
+if (cd "$tmp/repo" && VELNOR_PACKAGE_CHANNEL=preview VELNOR_PACKAGE_RELEASE_TAG=preview VELNOR_VERIFIED_PACKAGE_DIR="$preview_mismatched_supporting_verified" ./scripts/package-update.sh); then
   echo "mismatched supporting asset was accepted" >&2
   exit 1
 fi
@@ -204,7 +235,7 @@ jq --slurpfile manifest "$preview_payload_reclassified_verified/release-manifest
   '.manifest = $manifest[0]' "$preview_payload_reclassified_verified/identity.json" \
   > "$tmp/bad-preview-payload-reclassified-identity.json"
 mv "$tmp/bad-preview-payload-reclassified-identity.json" "$preview_payload_reclassified_verified/identity.json"
-if (cd "$tmp/repo" && VELNOR_PACKAGE_CHANNEL=preview VELNOR_VERIFIED_PACKAGE_DIR="$preview_payload_reclassified_verified" ./scripts/package-update.sh); then
+if (cd "$tmp/repo" && VELNOR_PACKAGE_CHANNEL=preview VELNOR_PACKAGE_RELEASE_TAG=preview VELNOR_VERIFIED_PACKAGE_DIR="$preview_payload_reclassified_verified" ./scripts/package-update.sh); then
   echo "supporting asset replaced a payload" >&2
   exit 1
 fi
