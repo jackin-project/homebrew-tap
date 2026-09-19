@@ -6,6 +6,15 @@ manifest="$verified/release-manifest.json"
 identity="$verified/identity.json"
 channel=${VELNOR_PACKAGE_CHANNEL:-stable}
 
+if ! jq -s -e --slurpfile release_manifests "$manifest" '
+  length == 1 and
+  ($release_manifests | length == 1) and
+  .[0].manifest == $release_manifests[0]
+' "$identity" >/dev/null; then
+  echo "identity manifest does not match release manifest" >&2
+  exit 1
+fi
+
 if test "$channel" = preview; then
   jq -e '
     keys == ["manifest","source_digest","source_ref","source_repository"] and
@@ -37,7 +46,10 @@ if test "$channel" = preview; then
 
   asset() {
     local name=$1
-    test -f "$verified/$name"
+    if ! test -f "$verified/$name"; then
+      echo "missing package asset: $name" >&2
+      return 1
+    fi
     local digest
     digest=$(jq -er --arg name "$name" '
       [.assets[] | select(.name == $name)]
@@ -146,7 +158,10 @@ jq -e --arg ref "refs/tags/$tag" '
 
 asset() {
   local name=$1
-  test -f "$verified/$name"
+  if ! test -f "$verified/$name"; then
+    echo "missing package asset: $name" >&2
+    return 1
+  fi
   jq -er --arg name "$name" '
     [.assets[] | select(.name == $name)]
     | select(length == 1)
