@@ -53,6 +53,29 @@ preview_names=(
   jackin-capsule-aarch64-unknown-linux-gnu.tar.gz
   jackin-capsule-x86_64-unknown-linux-gnu.tar.gz
 )
+preview_supporting_names=(
+  SHA256SUMS
+  jackin-aarch64-apple-darwin.tar.gz.sha256
+  jackin-aarch64-apple-darwin.tar.gz.bundle
+  jackin-aarch64-apple-darwin.tar.gz.sbom.json
+  jackin-x86_64-apple-darwin.tar.gz.sha256
+  jackin-x86_64-apple-darwin.tar.gz.bundle
+  jackin-x86_64-apple-darwin.tar.gz.sbom.json
+  jackin-aarch64-unknown-linux-gnu.tar.gz.sha256
+  jackin-aarch64-unknown-linux-gnu.tar.gz.bundle
+  jackin-aarch64-unknown-linux-gnu.tar.gz.sbom.json
+  jackin-x86_64-unknown-linux-gnu.tar.gz.sha256
+  jackin-x86_64-unknown-linux-gnu.tar.gz.bundle
+  jackin-x86_64-unknown-linux-gnu.tar.gz.sbom.json
+  jackin-capsule-aarch64-unknown-linux-gnu.tar.gz.sha256
+  jackin-capsule-aarch64-unknown-linux-gnu.tar.gz.bundle
+  jackin-capsule-aarch64-unknown-linux-gnu.tar.gz.sbom.json
+  jackin-capsule-x86_64-unknown-linux-gnu.tar.gz.sha256
+  jackin-capsule-x86_64-unknown-linux-gnu.tar.gz.bundle
+  jackin-capsule-x86_64-unknown-linux-gnu.tar.gz.sbom.json
+  capsule-manifest.json
+  capsule-manifest.json.bundle
+)
 mkdir "$tmp/preview-binary"
 cat > "$tmp/preview-binary/jackin" <<EOF
 #!/usr/bin/env bash
@@ -69,9 +92,30 @@ for name in "${preview_names[@]}"; do
   digest=$(shasum -a 256 "$preview_verified/$name" | awk '{print $1}')
   jq -cn --arg name "$name" --arg sha256 "$digest" '{name:$name,sha256:$sha256}' >> "$tmp/preview-assets.jsonl"
 done
+jq -s -r '.[] | "\(.sha256)  \(.name)"' "$tmp/preview-assets.jsonl" > "$preview_verified/SHA256SUMS"
+: > "$tmp/preview-supporting-assets.jsonl"
+for name in "${preview_supporting_names[@]}"; do
+  case "$name" in
+    SHA256SUMS)
+      ;;
+    *.sha256)
+      payload=${name%.sha256}
+      digest=$(jq -s -er --arg name "$payload" '.[] | select(.name == $name) | .sha256' "$tmp/preview-assets.jsonl")
+      printf '%s  %s\n' "$digest" "$payload" > "$preview_verified/$name"
+      ;;
+    *)
+      printf 'support-fixture-%s\n' "$name" > "$preview_verified/$name"
+      ;;
+  esac
+  digest=$(shasum -a 256 "$preview_verified/$name" | awk '{print $1}')
+  jq -cn --arg name "$name" --arg sha256 "$digest" '{name:$name,sha256:$sha256}' \
+    >> "$tmp/preview-supporting-assets.jsonl"
+done
 jq -Sn --arg source_repository jackin-project/jackin --arg source_ref refs/heads/main \
-  --arg source_commit "$commit" --arg version "$preview_version" --slurpfile assets "$tmp/preview-assets.jsonl" \
-  '{schema:"velnor.package-release.v1",source_repository:$source_repository,source_ref:$source_ref,source_commit:$source_commit,version:$version,assets:$assets}' \
+  --arg source_commit "$commit" --arg version "$preview_version" \
+  --slurpfile assets "$tmp/preview-assets.jsonl" \
+  --slurpfile supporting_assets "$tmp/preview-supporting-assets.jsonl" \
+  '{schema:"velnor.package-release.v1",source_repository:$source_repository,source_ref:$source_ref,source_commit:$source_commit,version:$version,assets:$assets,supporting_assets:$supporting_assets}' \
   > "$preview_verified/release-manifest.json"
 jq -Sn --arg source_repository jackin-project/jackin --arg source_ref refs/heads/main \
   --arg source_digest "$commit" --slurpfile manifest "$preview_verified/release-manifest.json" \
@@ -114,4 +158,57 @@ fi
 (
   cd "$tmp/repo"
   shasum -a 256 -c "$tmp/first.sha"
+)
+preview_missing_supporting_verified="$tmp/preview-missing-supporting-verified"
+cp -R "$preview_verified" "$preview_missing_supporting_verified"
+rm "$preview_missing_supporting_verified/SHA256SUMS"
+if (cd "$tmp/repo" && VELNOR_PACKAGE_CHANNEL=preview VELNOR_VERIFIED_PACKAGE_DIR="$preview_missing_supporting_verified" ./scripts/package-update.sh); then
+  echo "missing supporting asset was accepted" >&2
+  exit 1
+fi
+(
+  cd "$tmp/repo"
+  shasum -a 256 -c "$tmp/preview.sha"
+)
+
+preview_extra_verified="$tmp/preview-extra-verified"
+cp -R "$preview_verified" "$preview_extra_verified"
+printf 'unexpected\n' > "$preview_extra_verified/unlisted-supporting.asset"
+if (cd "$tmp/repo" && VELNOR_PACKAGE_CHANNEL=preview VELNOR_VERIFIED_PACKAGE_DIR="$preview_extra_verified" ./scripts/package-update.sh); then
+  echo "extra supporting asset was accepted" >&2
+  exit 1
+fi
+(
+  cd "$tmp/repo"
+  shasum -a 256 -c "$tmp/preview.sha"
+)
+
+preview_mismatched_supporting_verified="$tmp/preview-mismatched-supporting-verified"
+cp -R "$preview_verified" "$preview_mismatched_supporting_verified"
+printf 'tampered\n' >> "$preview_mismatched_supporting_verified/SHA256SUMS"
+if (cd "$tmp/repo" && VELNOR_PACKAGE_CHANNEL=preview VELNOR_VERIFIED_PACKAGE_DIR="$preview_mismatched_supporting_verified" ./scripts/package-update.sh); then
+  echo "mismatched supporting asset was accepted" >&2
+  exit 1
+fi
+(
+  cd "$tmp/repo"
+  shasum -a 256 -c "$tmp/preview.sha"
+)
+
+preview_payload_reclassified_verified="$tmp/preview-payload-reclassified-verified"
+cp -R "$preview_verified" "$preview_payload_reclassified_verified"
+jq '.assets = .assets[0:5] | .supporting_assets += [{name:"jackin-capsule-x86_64-unknown-linux-gnu.tar.gz",sha256:(.assets[0].sha256)}]' \
+  "$preview_payload_reclassified_verified/release-manifest.json" > "$tmp/bad-preview-payload-reclassified.json"
+mv "$tmp/bad-preview-payload-reclassified.json" "$preview_payload_reclassified_verified/release-manifest.json"
+jq --slurpfile manifest "$preview_payload_reclassified_verified/release-manifest.json" \
+  '.manifest = $manifest[0]' "$preview_payload_reclassified_verified/identity.json" \
+  > "$tmp/bad-preview-payload-reclassified-identity.json"
+mv "$tmp/bad-preview-payload-reclassified-identity.json" "$preview_payload_reclassified_verified/identity.json"
+if (cd "$tmp/repo" && VELNOR_PACKAGE_CHANNEL=preview VELNOR_VERIFIED_PACKAGE_DIR="$preview_payload_reclassified_verified" ./scripts/package-update.sh); then
+  echo "supporting asset replaced a payload" >&2
+  exit 1
+fi
+(
+  cd "$tmp/repo"
+  shasum -a 256 -c "$tmp/preview.sha"
 )
