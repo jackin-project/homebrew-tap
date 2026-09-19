@@ -64,7 +64,7 @@ if test "$channel" = preview; then
   cat > Formula/jackin-preview.rb <<EOF
 # source-sha: $source_commit
 class JackinPreview < Formula
-  desc "CLI for orchestrating autonomous AI coding agents in isolated sandboxed environments — reproducible, scoped, and fully under your control"
+  desc "CLI for orchestrating autonomous AI coding agents"
   homepage "https://github.com/jackin-project/jackin"
   version "$version"
   license "Apache-2.0"
@@ -91,6 +91,8 @@ class JackinPreview < Formula
     end
   end
 
+  conflicts_with "jackin-project/tap/jackin", because: "preview and stable install the same binary"
+
   resource "jackin-capsule-aarch64-unknown-linux-gnu" do
     url "https://github.com/jackin-project/jackin/releases/download/preview/jackin-capsule-aarch64-unknown-linux-gnu.tar.gz"
     sha256 "$capsule_arm"
@@ -100,8 +102,6 @@ class JackinPreview < Formula
     url "https://github.com/jackin-project/jackin/releases/download/preview/jackin-capsule-x86_64-unknown-linux-gnu.tar.gz"
     sha256 "$capsule_intel"
   end
-
-  conflicts_with "jackin-project/tap/jackin", because: "preview and stable install the same binary"
 
   def install
     bin.install "jackin"

@@ -1,6 +1,6 @@
 # source-sha: a506eee0581ef7add4f615281dbb90d828d5a657
 class JackinPreview < Formula
-  desc "CLI for orchestrating autonomous AI coding agents in isolated sandboxed environments — reproducible, scoped, and fully under your control"
+  desc "CLI for orchestrating autonomous AI coding agents"
   homepage "https://github.com/jackin-project/jackin"
   version "0.6.4-preview.1181+a506eee"
   license "Apache-2.0"
@@ -27,6 +27,8 @@ class JackinPreview < Formula
     end
   end
 
+  conflicts_with "jackin-project/tap/jackin", because: "preview and stable install the same binary"
+
   resource "jackin-capsule-aarch64-unknown-linux-gnu" do
     url "https://github.com/jackin-project/jackin/releases/download/preview/jackin-capsule-aarch64-unknown-linux-gnu.tar.gz"
     sha256 "6c24b131f74bb9574ab5e0670150da6d7ec17b006210fd5132dce148d40e606b"
@@ -36,8 +38,6 @@ class JackinPreview < Formula
     url "https://github.com/jackin-project/jackin/releases/download/preview/jackin-capsule-x86_64-unknown-linux-gnu.tar.gz"
     sha256 "7cf2f29c55799ddbc359ab0b2b39f4b8a2307f4e96b9c1c601e7e8f780fb6b89"
   end
-
-  conflicts_with "jackin-project/tap/jackin", because: "preview and stable install the same binary"
 
   def install
     bin.install "jackin"
