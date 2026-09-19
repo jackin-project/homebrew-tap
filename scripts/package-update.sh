@@ -16,7 +16,7 @@ if ! jq -s -e --slurpfile release_manifests "$manifest" '
 fi
 
 if [[ "$channel" == preview ]]; then
-  if test "${VELNOR_PACKAGE_RELEASE_TAG-}" != preview; then
+  if [[ "${VELNOR_PACKAGE_RELEASE_TAG-}" != "preview" ]]; then
     echo "preview package updates require VELNOR_PACKAGE_RELEASE_TAG=preview" >&2
     exit 1
   fi
