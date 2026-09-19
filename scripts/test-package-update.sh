@@ -159,7 +159,6 @@ fi
   cd "$tmp/repo"
   shasum -a 256 -c "$tmp/first.sha"
 )
-
 preview_missing_supporting_verified="$tmp/preview-missing-supporting-verified"
 cp -R "$preview_verified" "$preview_missing_supporting_verified"
 rm "$preview_missing_supporting_verified/SHA256SUMS"
