@@ -5,7 +5,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 cp -R "$root/." "$tmp/repo"
-test "$(grep -cF 'releases/download/$VELNOR_PACKAGE_RELEASE_TAG/' "$root/scripts/package-update.sh")" -eq 6
+[[ "$(grep -cF 'releases/download/$VELNOR_PACKAGE_RELEASE_TAG/' "$root/scripts/package-update.sh")" -eq 6 ]]
 if grep -Fq 'releases/download/preview/' "$root/scripts/package-update.sh"; then
   echo "preview release URLs must use VELNOR_PACKAGE_RELEASE_TAG" >&2
   exit 1
