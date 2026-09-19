@@ -15,7 +15,12 @@ if ! jq -s -e --slurpfile release_manifests "$manifest" '
   exit 1
 fi
 
-if test "$channel" = preview; then
+if [[ "$channel" == preview ]]; then
+  if [[ "${VELNOR_PACKAGE_RELEASE_TAG-}" != "preview" ]]; then
+    echo "preview package updates require VELNOR_PACKAGE_RELEASE_TAG=preview" >&2
+    exit 1
+  fi
+
   jq -e '
     keys == ["manifest","source_digest","source_ref","source_repository"] and
     .source_repository == "jackin-project/jackin" and
@@ -138,22 +143,22 @@ class JackinPreview < Formula
 
   on_macos do
     on_arm do
-      url "https://github.com/jackin-project/jackin/releases/download/preview/jackin-aarch64-apple-darwin.tar.gz"
+      url "https://github.com/jackin-project/jackin/releases/download/$VELNOR_PACKAGE_RELEASE_TAG/jackin-aarch64-apple-darwin.tar.gz"
       sha256 "$mac_arm"
     end
     on_intel do
-      url "https://github.com/jackin-project/jackin/releases/download/preview/jackin-x86_64-apple-darwin.tar.gz"
+      url "https://github.com/jackin-project/jackin/releases/download/$VELNOR_PACKAGE_RELEASE_TAG/jackin-x86_64-apple-darwin.tar.gz"
       sha256 "$mac_intel"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/jackin-project/jackin/releases/download/preview/jackin-aarch64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/jackin-project/jackin/releases/download/$VELNOR_PACKAGE_RELEASE_TAG/jackin-aarch64-unknown-linux-gnu.tar.gz"
       sha256 "$linux_arm"
     end
     on_intel do
-      url "https://github.com/jackin-project/jackin/releases/download/preview/jackin-x86_64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/jackin-project/jackin/releases/download/$VELNOR_PACKAGE_RELEASE_TAG/jackin-x86_64-unknown-linux-gnu.tar.gz"
       sha256 "$linux_intel"
     end
   end
@@ -161,12 +166,12 @@ class JackinPreview < Formula
   conflicts_with "jackin-project/tap/jackin", because: "preview and stable install the same binary"
 
   resource "jackin-capsule-aarch64-unknown-linux-gnu" do
-    url "https://github.com/jackin-project/jackin/releases/download/preview/jackin-capsule-aarch64-unknown-linux-gnu.tar.gz"
+    url "https://github.com/jackin-project/jackin/releases/download/$VELNOR_PACKAGE_RELEASE_TAG/jackin-capsule-aarch64-unknown-linux-gnu.tar.gz"
     sha256 "$capsule_arm"
   end
 
   resource "jackin-capsule-x86_64-unknown-linux-gnu" do
-    url "https://github.com/jackin-project/jackin/releases/download/preview/jackin-capsule-x86_64-unknown-linux-gnu.tar.gz"
+    url "https://github.com/jackin-project/jackin/releases/download/$VELNOR_PACKAGE_RELEASE_TAG/jackin-capsule-x86_64-unknown-linux-gnu.tar.gz"
     sha256 "$capsule_intel"
   end
 
