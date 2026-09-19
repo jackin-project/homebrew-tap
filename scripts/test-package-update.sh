@@ -84,19 +84,34 @@ jq -Sn --arg source_repository jackin-project/jackin --arg source_ref refs/heads
   grep -Fx "# source-sha: $commit" Formula/jackin-preview.rb
   grep -F "version \"$preview_version\"" Formula/jackin-preview.rb
   test "$(grep -cE 'sha256 \"[0-9a-f]{64}\"$' Formula/jackin-preview.rb)" -eq 6
-  ! grep -Eq 'sha256 \"[0-9a-f]{64}  ' Formula/jackin-preview.rb
+  if grep -Eq 'sha256 \"[0-9a-f]{64}  ' Formula/jackin-preview.rb; then
+    exit 1
+  fi
+  shasum -a 256 Formula/jackin-preview.rb > "$tmp/preview.sha"
 )
 
-jq '.version = "1.2.3-preview.43+0123456"' "$preview_verified/release-manifest.json" > "$tmp/bad-preview.json"
-mv "$tmp/bad-preview.json" "$preview_verified/release-manifest.json"
-if (cd "$tmp/repo" && VELNOR_PACKAGE_CHANNEL=preview VELNOR_VERIFIED_PACKAGE_DIR="$preview_verified" ./scripts/package-update.sh); then
-  echo "preview binary/version mismatch was accepted" >&2
+preview_mismatch_verified="$tmp/preview-mismatch-verified"
+cp -R "$preview_verified" "$preview_mismatch_verified"
+jq '.manifest.source_commit = "fedcba9876543210fedcba9876543210fedcba98"' \
+  "$preview_mismatch_verified/identity.json" > "$tmp/bad-preview-identity.json"
+mv "$tmp/bad-preview-identity.json" "$preview_mismatch_verified/identity.json"
+if (cd "$tmp/repo" && VELNOR_PACKAGE_CHANNEL=preview VELNOR_VERIFIED_PACKAGE_DIR="$preview_mismatch_verified" ./scripts/package-update.sh); then
+  echo "mismatched identity manifest was accepted" >&2
   exit 1
 fi
+(
+  cd "$tmp/repo"
+  shasum -a 256 -c "$tmp/preview.sha"
+)
 
-jq '.assets |= .[0:6]' "$verified/release-manifest.json" > "$tmp/bad.json"
-mv "$tmp/bad.json" "$verified/release-manifest.json"
-if (cd "$tmp/repo" && VELNOR_VERIFIED_PACKAGE_DIR="$verified" ./scripts/package-update.sh); then
-  echo "incomplete release asset set was accepted" >&2
+incomplete_verified="$tmp/incomplete-verified"
+cp -R "$verified" "$incomplete_verified"
+rm "$incomplete_verified/jackin-${version}-aarch64-apple-darwin.tar.gz"
+if (cd "$tmp/repo" && VELNOR_VERIFIED_PACKAGE_DIR="$incomplete_verified" ./scripts/package-update.sh); then
+  echo "incomplete package was accepted" >&2
   exit 1
 fi
+(
+  cd "$tmp/repo"
+  shasum -a 256 -c "$tmp/first.sha"
+)
