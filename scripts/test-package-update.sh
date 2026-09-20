@@ -129,6 +129,8 @@ jq -Sn --arg source_repository jackin-project/jackin --arg source_ref refs/heads
 
 preview_git_bin="$tmp/preview-git-bin"
 mkdir "$preview_git_bin"
+preview_git_log="$tmp/preview-git.log"
+: > "$preview_git_log"
 cat > "$preview_git_bin/git" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -139,14 +141,49 @@ if [[ "$#" -ne 4 || "$1" != ls-remote || "$2" != --exit-code ||
   echo "unexpected git invocation" >&2
   exit 1
 fi
-if [[ "$4" == 'refs/tags/preview^{}' ]]; then
-  exit 2
-fi
-printf '%s\t%s\n' "${VELNOR_TEST_PREVIEW_TAG_COMMIT:?}" "$4"
+printf '%s\n' "$4" >> "${VELNOR_TEST_PREVIEW_TAG_LOG:?}"
+case "${VELNOR_TEST_PREVIEW_TAG_MODE:-annotated-success}" in
+  annotated-success)
+    if [[ "$4" != 'refs/tags/preview^{}' ]]; then
+      echo "annotated tag lookup was not used" >&2
+      exit 1
+    fi
+    printf '%s\t%s\n' "${VELNOR_TEST_PREVIEW_TAG_COMMIT:?}" "$4"
+    ;;
+  lightweight-fallback)
+    if [[ "$4" == 'refs/tags/preview^{}' ]]; then
+      exit 2
+    fi
+    printf '%s\t%s\n' "${VELNOR_TEST_PREVIEW_TAG_COMMIT:?}" "$4"
+    ;;
+  both-fail)
+    exit 2
+    ;;
+  malformed)
+    printf 'not-a-commit\t%s\n' "$4"
+    ;;
+  multiple-line)
+    printf '%s\t%s\nmalformed\n' "${VELNOR_TEST_PREVIEW_TAG_COMMIT:?}" "$4"
+    ;;
+  *)
+    echo "unexpected preview tag mock mode" >&2
+    exit 1
+    ;;
+esac
 EOF
 chmod 0755 "$preview_git_bin/git"
 export PATH="$preview_git_bin:$PATH"
 export VELNOR_TEST_PREVIEW_TAG_COMMIT="$commit"
+export VELNOR_TEST_PREVIEW_TAG_LOG="$preview_git_log"
+
+assert_preview_git_queries() {
+  printf '%s\n' "$@" > "$tmp/expected-preview-git.log"
+  if ! cmp -s "$tmp/expected-preview-git.log" "$preview_git_log"; then
+    echo "unexpected preview tag lookup sequence" >&2
+    diff -u "$tmp/expected-preview-git.log" "$preview_git_log" >&2 || true
+    exit 1
+  fi
+}
 
 (
   cd "$tmp/repo"
@@ -159,6 +196,58 @@ export VELNOR_TEST_PREVIEW_TAG_COMMIT="$commit"
   fi
   shasum -a 256 Formula/jackin-preview.rb > "$tmp/preview.sha"
 )
+assert_preview_git_queries 'refs/tags/preview^{}'
+
+: > "$preview_git_log"
+(
+  cd "$tmp/repo"
+  VELNOR_TEST_PREVIEW_TAG_MODE=lightweight-fallback \
+    VELNOR_PACKAGE_CHANNEL=preview VELNOR_PACKAGE_RELEASE_TAG=preview \
+    VELNOR_VERIFIED_PACKAGE_DIR="$preview_verified" ./scripts/package-update.sh
+)
+assert_preview_git_queries 'refs/tags/preview^{}' 'refs/tags/preview'
+(
+  cd "$tmp/repo"
+  shasum -a 256 -c "$tmp/preview.sha"
+)
+
+preview_both_tag_lookups_failed_verified="$tmp/preview-both-tag-lookups-failed-verified"
+cp -R "$preview_verified" "$preview_both_tag_lookups_failed_verified"
+: > "$preview_git_log"
+if (
+  cd "$tmp/repo"
+  VELNOR_TEST_PREVIEW_TAG_MODE=both-fail \
+    VELNOR_PACKAGE_CHANNEL=preview VELNOR_PACKAGE_RELEASE_TAG=preview \
+    VELNOR_VERIFIED_PACKAGE_DIR="$preview_both_tag_lookups_failed_verified" ./scripts/package-update.sh
+); then
+  echo "preview tag accepted when both Git lookups failed" >&2
+  exit 1
+fi
+assert_preview_git_queries 'refs/tags/preview^{}' 'refs/tags/preview'
+(
+  cd "$tmp/repo"
+  shasum -a 256 -c "$tmp/preview.sha"
+)
+
+for preview_tag_output_mode in malformed multiple-line; do
+  preview_tag_output_verified="$tmp/preview-$preview_tag_output_mode-verified"
+  cp -R "$preview_verified" "$preview_tag_output_verified"
+  : > "$preview_git_log"
+  if (
+    cd "$tmp/repo"
+    VELNOR_TEST_PREVIEW_TAG_MODE="$preview_tag_output_mode" \
+      VELNOR_PACKAGE_CHANNEL=preview VELNOR_PACKAGE_RELEASE_TAG=preview \
+      VELNOR_VERIFIED_PACKAGE_DIR="$preview_tag_output_verified" ./scripts/package-update.sh
+  ); then
+    echo "preview tag accepted $preview_tag_output_mode Git output" >&2
+    exit 1
+  fi
+  assert_preview_git_queries 'refs/tags/preview^{}'
+  (
+    cd "$tmp/repo"
+    shasum -a 256 -c "$tmp/preview.sha"
+  )
+done
 
 preview_missing_tag_verified="$tmp/preview-missing-tag-verified"
 cp -R "$preview_verified" "$preview_missing_tag_verified"
