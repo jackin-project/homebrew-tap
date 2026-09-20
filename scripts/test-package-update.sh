@@ -5,6 +5,23 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 cp -R "$root/." "$tmp/repo"
+# Always invoke ruby from the trusted tap root. A mise shim executed under the
+# copied tmp/repo/mise.toml fails closed (untrusted config).
+ruby_check() {
+  (cd "$root" && ruby -c "$1") >/dev/null
+}
+shopt -s nullglob
+formula_files=("$root"/Formula/*.rb)
+if [ "${#formula_files[@]}" -eq 0 ]; then
+  echo "no Formula ruby files to syntax-check" >&2
+  exit 1
+fi
+for f in "${formula_files[@]}"; do
+  ruby_check "$f"
+done
+shopt -u nullglob
+# Intentional: count the literal `$VELNOR_PACKAGE_RELEASE_TAG` URL template.
+# shellcheck disable=SC2016
 [[ "$(grep -cF 'releases/download/$VELNOR_PACKAGE_RELEASE_TAG/' "$root/scripts/package-update.sh")" -eq 6 ]]
 if grep -Fq 'releases/download/preview/' "$root/scripts/package-update.sh"; then
   echo "preview release URLs must use VELNOR_PACKAGE_RELEASE_TAG" >&2
@@ -39,6 +56,8 @@ jq -Sn --arg source_repository jackin-project/jackin --arg source_ref refs/tags/
 (
   cd "$tmp/repo"
   VELNOR_VERIFIED_PACKAGE_DIR="$verified" ./scripts/package-update.sh
+  ruby_check "$tmp/repo/Formula/jackin.rb"
+  ruby_check "$tmp/repo/Casks/jackin-desktop.rb"
   shasum -a 256 Formula/jackin.rb Casks/jackin-desktop.rb > "$tmp/first.sha"
   VELNOR_VERIFIED_PACKAGE_DIR="$verified" ./scripts/package-update.sh
   shasum -a 256 -c "$tmp/first.sha"
@@ -188,6 +207,7 @@ assert_preview_git_queries() {
 (
   cd "$tmp/repo"
   VELNOR_PACKAGE_CHANNEL=preview VELNOR_PACKAGE_RELEASE_TAG=preview VELNOR_VERIFIED_PACKAGE_DIR="$preview_verified" ./scripts/package-update.sh
+  ruby_check "$tmp/repo/Formula/jackin-preview.rb"
   grep -Fx "# source-sha: $commit" Formula/jackin-preview.rb
   grep -F "version \"$preview_version\"" Formula/jackin-preview.rb
   test "$(grep -cE 'sha256 \"[0-9a-f]{64}\"$' Formula/jackin-preview.rb)" -eq 6

@@ -206,7 +206,7 @@ jobs:
       full_units: ${{ needs.plan.outputs.full_units }}
       base_sha: ${{ needs.plan.outputs.base_sha }}
       head_sha: ${{ needs.plan.outputs.head_sha }}
-      mise_tools: "actionlint jq python uv pipx:reuse"
+      mise_tools: "actionlint jq python uv pipx:reuse shellcheck"
   ci-required:
     name: ci-required
     if: ${{ always() }}

@@ -1,5 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Alexey Zhokhov
 # SPDX-License-Identifier: Apache-2.0
+#
+# Gate contract: generated CI runs `mise run check` once (velnor generic
+# homebrew unit). Every named gate reaches a disjoint leaf set so each leaf
+# runs once per `mise run check`. build = formula Ruby syntax. test = package
+# updater fixture test. lint = actionlint + shellcheck. No fmt gate: no
+# formatter is pinned. package-update is the updater workflow task, not a CI
+# gate.
 
 [settings]
 lockfile = true
@@ -8,11 +15,15 @@ lockfile = true
 actionlint = "1.7.12"
 jq = "1.8.2"
 python = "3.14"
+shellcheck = "0.11.0"
 uv = "0.11.29"
 "pipx:reuse" = { version = "6.2.0", extras = "charset-normalizer", depends = ["python"] }
 
 [tasks.actionlint]
 run = "actionlint"
+
+[tasks.shellcheck]
+run = "shellcheck scripts/*.sh"
 
 [tasks.package-update]
 run = "./scripts/package-update.sh"
@@ -20,17 +31,18 @@ run = "./scripts/package-update.sh"
 [tasks.package-update-test]
 run = "./scripts/test-package-update.sh"
 
-[tasks.check]
-depends = ["actionlint", "package-update-test"]
-
 [tasks.build]
-depends = ["check"]
+# POSIX /bin/sh (CI dash): no pipefail. Avoid `${#...}`: mise Tera treats `{#` as a comment.
+run = "set -e; for f in Formula/*.rb; do ruby -c \"$f\"; done; if [ -d Casks ]; then for f in Casks/*.rb; do [ -e \"$f\" ] || continue; ruby -c \"$f\"; done; fi"
+
+[tasks.reuse-lint]
+run = "reuse lint"
 
 [tasks.test]
 depends = ["package-update-test"]
 
 [tasks.lint]
-depends = ["actionlint"]
+depends = ["actionlint", "shellcheck"]
 
-[tasks.fmt]
-depends = ["check"]
+[tasks.check]
+depends = ["actionlint", "shellcheck", "package-update-test", "build", "reuse-lint"]
