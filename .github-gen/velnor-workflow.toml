@@ -20,4 +20,4 @@ kind = "homebrew"
 root = "."
 watch = ["Formula/**", "Casks/**", "Brewfile", "mise.toml", "mise.lock", "scripts/**"]
 ci_tasks = ["check"]
-mise_tools = ["actionlint", "jq", "python", "uv", "pipx:reuse"]
+mise_tools = ["actionlint", "jq", "python", "uv", "pipx:reuse", "shellcheck"]
