@@ -127,6 +127,27 @@ jq -Sn --arg source_repository jackin-project/jackin --arg source_ref refs/heads
   '{source_repository:$source_repository,source_ref:$source_ref,source_digest:$source_digest,manifest:$manifest[0]}' \
   > "$preview_verified/identity.json"
 
+preview_git_bin="$tmp/preview-git-bin"
+mkdir "$preview_git_bin"
+cat > "$preview_git_bin/git" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$#" -ne 4 || "$1" != ls-remote || "$2" != --exit-code ||
+  "$3" != https://github.com/jackin-project/jackin.git ||
+  ("$4" != refs/tags/preview && "$4" != 'refs/tags/preview^{}') ]]; then
+  echo "unexpected git invocation" >&2
+  exit 1
+fi
+if [[ "$4" == 'refs/tags/preview^{}' ]]; then
+  exit 2
+fi
+printf '%s\t%s\n' "${VELNOR_TEST_PREVIEW_TAG_COMMIT:?}" "$4"
+EOF
+chmod 0755 "$preview_git_bin/git"
+export PATH="$preview_git_bin:$PATH"
+export VELNOR_TEST_PREVIEW_TAG_COMMIT="$commit"
+
 (
   cd "$tmp/repo"
   VELNOR_PACKAGE_CHANNEL=preview VELNOR_PACKAGE_RELEASE_TAG=preview VELNOR_VERIFIED_PACKAGE_DIR="$preview_verified" ./scripts/package-update.sh
@@ -158,6 +179,22 @@ preview_mismatched_tag_verified="$tmp/preview-mismatched-tag-verified"
 cp -R "$preview_verified" "$preview_mismatched_tag_verified"
 if (cd "$tmp/repo" && VELNOR_PACKAGE_CHANNEL=preview VELNOR_PACKAGE_RELEASE_TAG=preview-foreign VELNOR_VERIFIED_PACKAGE_DIR="$preview_mismatched_tag_verified" ./scripts/package-update.sh); then
   echo "mismatched preview release tag was accepted" >&2
+  exit 1
+fi
+(
+  cd "$tmp/repo"
+  shasum -a 256 -c "$tmp/preview.sha"
+)
+
+preview_mismatched_ref_verified="$tmp/preview-mismatched-ref-verified"
+cp -R "$preview_verified" "$preview_mismatched_ref_verified"
+if (
+  cd "$tmp/repo"
+  VELNOR_TEST_PREVIEW_TAG_COMMIT=fedcba9876543210fedcba9876543210fedcba98 \
+    VELNOR_PACKAGE_CHANNEL=preview VELNOR_PACKAGE_RELEASE_TAG=preview \
+    VELNOR_VERIFIED_PACKAGE_DIR="$preview_mismatched_ref_verified" ./scripts/package-update.sh
+); then
+  echo "mismatched preview Git tag target was accepted" >&2
   exit 1
 fi
 (

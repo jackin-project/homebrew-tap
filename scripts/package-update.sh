@@ -29,8 +29,24 @@ if [[ "$channel" == preview ]]; then
   ' "$identity" >/dev/null
 
   version=$(jq -er '.version | select(test("^[0-9]+[.][0-9]+[.][0-9]+-preview[.][0-9]+[+][0-9a-f]{7}$"))' "$manifest")
+  source_repository=$(jq -er '.source_repository' "$identity")
   source_commit=$(jq -er '.source_commit' "$manifest")
   test "$(jq -r '.source_digest' "$identity")" = "$source_commit"
+  if ! release_tag_commit=$(git ls-remote --exit-code \
+    "https://github.com/$source_repository.git" \
+    "refs/tags/$VELNOR_PACKAGE_RELEASE_TAG^{}" | awk 'NR == 1 { print $1 }'); then
+    if ! release_tag_commit=$(git ls-remote --exit-code \
+      "https://github.com/$source_repository.git" \
+      "refs/tags/$VELNOR_PACKAGE_RELEASE_TAG" | awk 'NR == 1 { print $1 }'); then
+      echo "preview release tag could not be resolved" >&2
+      exit 1
+    fi
+  fi
+  if [[ ! "$release_tag_commit" =~ ^[0-9a-f]{40}$ ]] ||
+    [[ "$release_tag_commit" != "$source_commit" ]]; then
+    echo "preview release tag does not resolve to release source commit" >&2
+    exit 1
+  fi
   test "${version##*+}" = "${source_commit:0:7}"
   jq -e --arg commit "$source_commit" --arg version "$version" '
     keys == ["assets","schema","source_commit","source_ref","source_repository","supporting_assets","version"] and
