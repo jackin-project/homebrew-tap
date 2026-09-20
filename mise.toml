@@ -32,8 +32,8 @@ run = "./scripts/package-update.sh"
 run = "./scripts/test-package-update.sh"
 
 [tasks.build]
-# Avoid `${#...}`: mise parses task scripts as Tera templates (`{#` starts a comment).
-run = "set -euo pipefail; for f in Formula/*.rb; do ruby -c \"$f\"; done; if [ -d Casks ]; then for f in Casks/*.rb; do [ -e \"$f\" ] || continue; ruby -c \"$f\"; done; fi"
+# POSIX /bin/sh (CI dash): no pipefail. Avoid `${#...}`: mise Tera treats `{#` as a comment.
+run = "set -e; for f in Formula/*.rb; do ruby -c \"$f\"; done; if [ -d Casks ]; then for f in Casks/*.rb; do [ -e \"$f\" ] || continue; ruby -c \"$f\"; done; fi"
 
 [tasks.test]
 depends = ["package-update-test"]
