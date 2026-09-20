@@ -35,6 +35,9 @@ run = "./scripts/test-package-update.sh"
 # POSIX /bin/sh (CI dash): no pipefail. Avoid `${#...}`: mise Tera treats `{#` as a comment.
 run = "set -e; for f in Formula/*.rb; do ruby -c \"$f\"; done; if [ -d Casks ]; then for f in Casks/*.rb; do [ -e \"$f\" ] || continue; ruby -c \"$f\"; done; fi"
 
+[tasks.reuse-lint]
+run = "reuse lint"
+
 [tasks.test]
 depends = ["package-update-test"]
 
@@ -42,4 +45,4 @@ depends = ["package-update-test"]
 depends = ["actionlint", "shellcheck"]
 
 [tasks.check]
-depends = ["build", "test", "lint"]
+depends = ["actionlint", "shellcheck", "package-update-test", "build", "reuse-lint"]
