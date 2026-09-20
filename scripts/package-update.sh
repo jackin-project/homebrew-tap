@@ -32,15 +32,31 @@ if [[ "$channel" == preview ]]; then
   source_repository=$(jq -er '.source_repository' "$identity")
   source_commit=$(jq -er '.source_commit' "$manifest")
   test "$(jq -r '.source_digest' "$identity")" = "$source_commit"
-  if ! release_tag_commit=$(git ls-remote --exit-code \
-    "https://github.com/$source_repository.git" \
-    "refs/tags/$VELNOR_PACKAGE_RELEASE_TAG^{}" | awk 'NR == 1 { print $1 }'); then
-    if ! release_tag_commit=$(git ls-remote --exit-code \
+  release_tag_ref="refs/tags/$VELNOR_PACKAGE_RELEASE_TAG^{}"
+  if ! release_tag_output=$(git ls-remote --exit-code \
       "https://github.com/$source_repository.git" \
-      "refs/tags/$VELNOR_PACKAGE_RELEASE_TAG" | awk 'NR == 1 { print $1 }'); then
-      echo "preview release tag could not be resolved" >&2
-      exit 1
-    fi
+      "$release_tag_ref") &&
+    release_tag_ref="refs/tags/$VELNOR_PACKAGE_RELEASE_TAG" &&
+    ! release_tag_output=$(git ls-remote --exit-code \
+      "https://github.com/$source_repository.git" \
+      "$release_tag_ref"); then
+    echo "preview release tag could not be resolved" >&2
+    exit 1
+  fi
+  if ! release_tag_commit=$(awk -v expected_ref="$release_tag_ref" '
+    NR == 1 {
+      commit = $1
+      ref = $2
+    }
+    END {
+      if (NR != 1 || NF != 2 || ref != expected_ref) {
+        exit 1
+      }
+      print commit
+    }
+  ' <<< "$release_tag_output"); then
+    echo "preview release tag does not resolve to release source commit" >&2
+    exit 1
   fi
   if [[ ! "$release_tag_commit" =~ ^[0-9a-f]{40}$ ]] ||
     [[ "$release_tag_commit" != "$source_commit" ]]; then
