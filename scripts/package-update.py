@@ -127,7 +127,7 @@ def validate_receipt(receipt: dict[str, Any], env: dict[str, str]) -> dict[str, 
         not HEX40.fullmatch(source_sha)
         or source["ref"] != SOURCE_REF
         or source["default_branch"] != "main"
-        or source["event"] != "push"
+        or source["event"] != "workflow_run"
         or type(source["ci_run_id"]) is not int
         or not 0 < source["ci_run_id"] <= U64_MAX
         or type(source["ci_run_attempt"]) is not int

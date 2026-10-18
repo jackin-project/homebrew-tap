@@ -114,7 +114,7 @@ def fixture_receipt(
             "commit_sha": source_sha,
             "ref": "refs/heads/main",
             "default_branch": "main",
-            "event": "push",
+            "event": "workflow_run",
             "ci_run_id": 99001,
             "ci_run_attempt": 1,
         },
@@ -340,6 +340,13 @@ class PreviewUpdaterTest(unittest.TestCase):
                 invalid = fixture_receipt(inventory_mutation=mutation)
                 env = self.make_handoff(invalid)
                 self.assert_rejected_without_formula_write(env)
+
+    def test_rejects_non_completion_producer_events_without_write(self) -> None:
+        for event in ("push", "pull_request", "workflow_dispatch", ""):
+            with self.subTest(event=event):
+                receipt = fixture_receipt()
+                receipt["source"]["event"] = event
+                self.assert_rejected_without_formula_write(self.make_handoff(receipt))
 
     def test_downgrade_and_conflicting_equal_version_retry_reject_without_write(self) -> None:
         downgrade = fixture_receipt(count=40, source_sha=SOURCE_TAMPERED)

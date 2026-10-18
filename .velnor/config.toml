@@ -48,7 +48,7 @@ task = "homebrew-preview-install-test"
 directory = "."
 inputs = [".velnor/config.toml", "Formula/jackin-preview.rb", "mise.lock", "mise.toml", "scripts/homebrew_install_policy.py", "scripts/test-homebrew-install.sh", "scripts/test_homebrew_install_policy.py"]
 tools = ["python"]
-timeout_minutes = 45
+timeout_minutes = 5
 
 [checks.runner]
 label = "macos-26"
@@ -61,7 +61,7 @@ task = "package-update"
 directory = "."
 inputs = [".velnor/config.toml", "Formula/jackin-preview.rb", "mise.lock", "mise.toml", "scripts/homebrew_install_policy.py", "scripts/package-update.py", "scripts/package-update.sh", "scripts/test-homebrew-install.sh", "scripts/test-package-update.sh", "scripts/test_homebrew_install_policy.py", "scripts/test_package_update.py"]
 tools = ["python"]
-timeout_minutes = 30
+timeout_minutes = 5
 
 [checks.runner]
 label = "ubuntu-26.04"
