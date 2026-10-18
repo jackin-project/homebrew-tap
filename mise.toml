@@ -3,10 +3,11 @@
 #
 # Gate contract: generated CI runs `mise run check` once (velnor generic
 # homebrew unit). Every named gate reaches a disjoint leaf set so each leaf
-# runs once per `mise run check`. build = formula Ruby syntax. test = package
-# updater fixture test. lint = actionlint + shellcheck. No fmt gate: no
-# formatter is pinned. package-update is the updater workflow task, not a CI
-# gate.
+# runs once per `mise run check`. build = formula Ruby syntax. test = native
+# preview updater acceptance tests. Homebrew installation runs as a separate
+# typed native check on macOS ARM64. lint = actionlint + shellcheck. No fmt
+# gate: no formatter is pinned. package-update is the credential-free task
+# invoked from Velnor's captured tap-main checkout.
 
 [settings]
 lockfile = true
@@ -14,10 +15,9 @@ lockfile = true
 [tools]
 actionlint = "1.7.12"
 gh = "2.102.0"
-jq = "1.8.2"
-python = "3.14"
+python = "3.15.0"
 shellcheck = "0.11.0"
-uv = "0.11.29"
+uv = "0.13.1"
 zizmor = "1.31.1"
 "pipx:reuse" = { version = "6.2.0", extras = "charset-normalizer", depends = ["python"] }
 
@@ -32,6 +32,9 @@ run = "./scripts/package-update.sh"
 
 [tasks.package-update-test]
 run = "./scripts/test-package-update.sh"
+
+[tasks.homebrew-preview-install-test]
+run = "./scripts/test-homebrew-install.sh"
 
 [tasks.build]
 # POSIX /bin/sh (CI dash): no pipefail. Avoid `${#...}`: mise Tera treats `{#` as a comment.
