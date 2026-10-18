@@ -231,12 +231,12 @@ class PreviewUpdaterTest(unittest.TestCase):
             ],
         }
         self.assertEqual(
-            {product_id: list(targets) for product_id, (_, _, targets) in updater.PRODUCTS.items()},
             native_targets,
+            {product_id: list(targets) for product_id, (_, _, targets) in updater.PRODUCTS.items()},
         )
         fixture_products = {product["id"]: [payload["target"] for payload in product["payloads"]]
                             for product in fixture_receipt()["products"]}
-        self.assertEqual(fixture_products, native_targets)
+        self.assertEqual(native_targets, fixture_products)
 
     def run_updater(self, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         task_env = os.environ.copy()
@@ -252,11 +252,23 @@ class PreviewUpdaterTest(unittest.TestCase):
             text=True,
         )
 
+    def test_version_grammar_rejects_unicode_decimal_digits(self) -> None:
+        base = "10.20.30"
+        version = f"{base}-preview.40+abcdef0"
+        self.assertIsNotNone(updater.SEMVER.fullmatch(base))
+        self.assertIsNotNone(updater.PREVIEW_VERSION.fullmatch(version))
+        for index in (1, 4, 7):
+            with self.subTest(base_index=index):
+                unicode_base = base[:index] + "٠" + base[index + 1 :]
+                self.assertIsNone(updater.SEMVER.fullmatch(unicode_base))
+                self.assertIsNone(updater.PREVIEW_VERSION.fullmatch(f"{unicode_base}-preview.40+abcdef0"))
+        self.assertIsNone(updater.PREVIEW_VERSION.fullmatch(f"{base}-preview.4٠+abcdef0"))
+
     def test_updates_only_literal_metadata_and_retry_is_byte_identical(self) -> None:
         result = self.run_updater()
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(0, result.returncode, result.stderr)
         first = self.formula.read_bytes()
-        self.assertNotEqual(first, self.initial)
+        self.assertNotEqual(self.initial, first)
         self.assertIn(f"# source-sha: {SOURCE_NEW}".encode(), first)
         self.assertIn(b'version "0.6.4-preview.42+abcdef0"', first)
         self.assertIn(b"releases/download/v0.6.4-preview.42+abcdef0/", first)
@@ -268,11 +280,11 @@ class PreviewUpdaterTest(unittest.TestCase):
             for asset in fixture_receipt()["assets"]
             if asset["kind"] == "payload"
         }
-        self.assertEqual(len(actual_urls), 6)
-        self.assertEqual(len(actual_hashes), 6)
+        self.assertEqual(6, len(actual_urls))
+        self.assertEqual(6, len(actual_hashes))
         self.assertEqual(
-            {name.decode("ascii"): digest.decode("ascii") for name, digest in zip(actual_urls, actual_hashes, strict=True)},
             expected_hashes,
+            {name.decode("ascii"): digest.decode("ascii") for name, digest in zip(actual_urls, actual_hashes, strict=True)},
         )
 
         # Only the literal metadata may change; all surrounding Ruby stays byte exact.
@@ -282,16 +294,16 @@ class PreviewUpdaterTest(unittest.TestCase):
         metadata_prefixes = (b"# source-sha: ", b"  version ", b"      url ", b"      sha256 ", b"    url ", b"    sha256 ")
         for old, new in zip(base_lines, actual_lines, strict=True):
             if not old.startswith(metadata_prefixes):
-                self.assertEqual(new, old)
+                self.assertEqual(old, new)
 
         retry = self.run_updater()
-        self.assertEqual(retry.returncode, 0, retry.stderr)
-        self.assertEqual(self.formula.read_bytes(), first)
+        self.assertEqual(0, retry.returncode, retry.stderr)
+        self.assertEqual(first, self.formula.read_bytes())
 
     def assert_rejected_without_formula_write(self, env: dict[str, str] | None = None) -> str:
         result = self.run_updater(env)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(self.formula.read_bytes(), self.initial)
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual(self.initial, self.formula.read_bytes())
         return result.stderr
 
     def test_tampered_receipt_digest_and_handoff_identities_reject_without_write(self) -> None:
@@ -359,7 +371,7 @@ class PreviewUpdaterTest(unittest.TestCase):
     def test_wrapper_executes_python_updater(self) -> None:
         wrapper = self.repo / "scripts/package-update.sh"
         result = subprocess.run([str(wrapper)], cwd=self.repo, env={**os.environ, **self.env}, check=False, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn(b'version "0.6.4-preview.42+abcdef0"', self.formula.read_bytes())
 
     def test_updater_has_no_network_archive_or_process_execution_surface(self) -> None:

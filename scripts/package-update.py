@@ -21,6 +21,7 @@ SOURCE_REF = "refs/heads/main"
 WORKFLOW_PATH = ".github/workflows/binary-preview.yml"
 FORMULA_PATH = "Formula/jackin-preview.rb"
 PREVIEW_JOB = "preview-signer"
+CAPSULE_MANIFEST_NAME = "capsule-manifest.json"
 TARGETS = (
     "aarch64-apple-darwin",
     "aarch64-unknown-linux-gnu",
@@ -164,7 +165,7 @@ def validate_receipt(receipt: dict[str, Any], env: dict[str, str]) -> dict[str, 
         not SEMVER.fullmatch(base)
         or not match
         or match.group("base") != base
-        or match.group("sha") != source_sha[:7]
+        or not source_sha.startswith(match.group("sha"))
         or match.group("sha") != sha7
         or type(count) is not int
         or not 0 < count <= U64_MAX
@@ -194,27 +195,31 @@ def validate_products(products: Any, base: str) -> None:
         raise fail("product inventory is not canonically ordered")
     seen: set[str] = set()
     for product in products:
-        product = exact_keys(product, {"id", "package", "package_version", "bins", "payloads"}, "product")
-        product_id = string(product["id"], "product id")
-        expected = PRODUCTS.get(product_id)
-        if not expected or product_id in seen:
-            raise fail("unexpected product identity")
-        seen.add(product_id)
-        package, bins, targets = expected
-        if product["package"] != package or product["package_version"] != base or product["bins"] != list(bins):
-            raise fail("product package or executable inventory mismatch")
-        payloads = product["payloads"]
-        if not isinstance(payloads, list) or len(payloads) != len(targets):
-            raise fail("product target inventory mismatch")
-        for payload, target in zip(payloads, targets, strict=True):
-            payload = exact_keys(payload, {"format", "target", "name", "members"}, "payload")
-            name = f"{product_id}-{target}.tar.gz"
-            if payload != {"format": "tar-gz", "target": target, "name": name, "members": list(bins)}:
-                raise fail("payload inventory mismatch")
+        validate_product(product, base, seen)
+
+
+def validate_product(product: Any, base: str, seen: set[str]) -> None:
+    product = exact_keys(product, {"id", "package", "package_version", "bins", "payloads"}, "product")
+    product_id = string(product["id"], "product id")
+    expected = PRODUCTS.get(product_id)
+    if not expected or product_id in seen:
+        raise fail("unexpected product identity")
+    seen.add(product_id)
+    package, bins, targets = expected
+    if product["package"] != package or product["package_version"] != base or product["bins"] != list(bins):
+        raise fail("product package or executable inventory mismatch")
+    payloads = product["payloads"]
+    if not isinstance(payloads, list) or len(payloads) != len(targets):
+        raise fail("product target inventory mismatch")
+    for payload, target in zip(payloads, targets, strict=True):
+        payload = exact_keys(payload, {"format", "target", "name", "members"}, "payload")
+        name = f"{product_id}-{target}.tar.gz"
+        if payload != {"format": "tar-gz", "target": target, "name": name, "members": list(bins)}:
+            raise fail("payload inventory mismatch")
 
 
 def validate_companions(companions: Any) -> None:
-    if companions != [{"id": "capsule-manifest", "name": "capsule-manifest.json"}]:
+    if companions != [{"id": "capsule-manifest", "name": CAPSULE_MANIFEST_NAME}]:
         raise fail("companion inventory mismatch")
 
 
@@ -231,9 +236,9 @@ def validate_assets(assets: Any) -> dict[str, str]:
             expected[f"{name}.bundle"] = ("signature_bundle", *owner)
             expected[f"{name}.sbom.json"] = ("sbom", *owner)
     expected["SHA256SUMS"] = ("checksum_list", None, None, None)
-    expected["capsule-manifest.json"] = ("companion", None, None, "capsule-manifest.json")
+    expected[CAPSULE_MANIFEST_NAME] = ("companion", None, None, CAPSULE_MANIFEST_NAME)
     expected["capsule-manifest.json.bundle"] = (
-        "companion_signature_bundle", None, None, "capsule-manifest.json"
+        "companion_signature_bundle", None, None, CAPSULE_MANIFEST_NAME
     )
     if any(not isinstance(asset, dict) or not isinstance(asset.get("name"), str) for asset in assets):
         raise fail("release asset record malformed")
@@ -269,7 +274,7 @@ def validate_evidence(evidence: Any, payload_digests: dict[str, str]) -> None:
         {"profile", "sbom_format", "signer_issuer", "signer_workflow_ref", "attestation_predicate", "attested_subject_names"},
         "evidence",
     )
-    expected_subjects = sorted([*payload_digests, "capsule-manifest.json", "release.json"])
+    expected_subjects = sorted([*payload_digests, CAPSULE_MANIFEST_NAME, "release.json"])
     if (
         evidence["profile"] != "signed-sbom-v1"
         or evidence["sbom_format"] != "CycloneDX-JSON"
@@ -302,6 +307,100 @@ def parse_release_url(value: str) -> tuple[str, str]:
     return tag, name
 
 
+class FormulaRewrite:
+    """Track the exact literal metadata slots while preserving all other bytes."""
+
+    def __init__(self, receipt: dict[str, Any], payload_digests: dict[str, str]) -> None:
+        self.receipt = receipt
+        self.payload_digests = payload_digests
+        self.slots = {"source": 0, "version": 0, "urls": 0, "hashes": 0}
+        self.prior_source: str | None = None
+        self.prior_version: str | None = None
+        self.last_url: str | None = None
+        self.seen: list[str] = []
+
+    def rewrite_line(self, line: str) -> str:
+        if line.startswith("# source-sha:"):
+            return self.rewrite_source(line)
+        if line.startswith("  version "):
+            return self.rewrite_version(line)
+        url_prefix = next((prefix for prefix in ('      url "', '    url "') if line.startswith(prefix)), None)
+        if url_prefix is not None:
+            return self.rewrite_url(line, url_prefix)
+        hash_prefix = next((prefix for prefix in ('      sha256 "', '    sha256 "') if line.startswith(prefix)), None)
+        if hash_prefix is not None:
+            return self.rewrite_hash(line, hash_prefix)
+        if line.startswith(("# source-sha:", "  version ", "      url ", "      sha256 ", "    url ", "    sha256 ")):
+            raise fail("unsupported formula metadata syntax")
+        return line
+
+    def rewrite_source(self, line: str) -> str:
+        if not line.startswith("# source-sha: ") or not line.endswith("\n"):
+            raise fail("unsupported source metadata syntax")
+        old_source = line[len("# source-sha: ") : -1]
+        if not HEX40.fullmatch(old_source):
+            raise fail("formula source SHA malformed")
+        self.slots["source"] += 1
+        self.prior_source = old_source
+        return f"# source-sha: {self.receipt['source']['commit_sha']}\n"
+
+    def rewrite_version(self, line: str) -> str:
+        prefix, suffix = '  version "', '"\n'
+        if not line.startswith(prefix) or not line.endswith(suffix):
+            raise fail("unsupported version metadata syntax")
+        old_version = line[len(prefix) : -len(suffix)]
+        parse_old_version(old_version, self.prior_source or "")
+        self.slots["version"] += 1
+        self.prior_version = old_version
+        return f'  version "{self.receipt["version"]["value"]}"\n'
+
+    def rewrite_url(self, line: str, prefix: str) -> str:
+        if not line.endswith('"\n'):
+            raise fail("unsupported URL metadata syntax")
+        old_tag, name = parse_release_url(line[len(prefix) : -2])
+        if self.prior_version is None or old_tag != f"v{self.prior_version}" or name not in self.payload_digests:
+            raise fail("formula base release binding mismatch")
+        if name not in self.seen:
+            self.seen.append(name)
+        self.last_url = name
+        self.slots["urls"] += 1
+        indent = line[: len(line) - len(line.lstrip(" "))]
+        return f'{indent}url "https://github.com/{SOURCE_REPOSITORY}/releases/download/{self.receipt["tag"]}/{name}"\n'
+
+    def rewrite_hash(self, line: str, prefix: str) -> str:
+        if not line.endswith('"\n'):
+            raise fail("unsupported SHA-256 metadata syntax")
+        old_hash = line[len(prefix) : -2]
+        if not HEX64.fullmatch(old_hash) or self.last_url is None:
+            raise fail("formula SHA-256 metadata malformed or unpaired")
+        replacement = f'{line[: len(line) - len(line.lstrip(" "))]}sha256 "{self.payload_digests[self.last_url]}"\n'
+        self.slots["hashes"] += 1
+        self.last_url = None
+        return replacement
+
+    def validate(self) -> None:
+        slots = self.slots
+        if slots["source"] != 1 or slots["version"] != 1 or len(self.seen) != 6 or slots["urls"] != 6 or slots["hashes"] != 6 or self.last_url is not None:
+            raise fail("formula metadata inventory mismatch")
+        if set(self.seen) != set(self.payload_digests):
+            raise fail("formula payload inventory mismatch")
+        if self.prior_source is None or self.prior_version is None:
+            raise fail("formula source or version missing")
+        validate_preview_transition(self.prior_source, self.prior_version, self.receipt)
+
+
+def validate_preview_transition(prior_source: str, prior_version: str, receipt: dict[str, Any]) -> None:
+    old_base, old_count = parse_old_version(prior_version, prior_source)
+    new_base = tuple(int(part) for part in receipt["version"]["base"].split("."))
+    new_count = receipt["version"]["commit_count"]
+    if new_base < old_base or (new_base == old_base and new_count < old_count):
+        raise fail("preview formula downgrade")
+    if new_base == old_base and new_count == old_count:
+        if prior_source != receipt["source"]["commit_sha"]:
+            raise fail("preview formula retry identity conflict")
+        # Retry is exact and cannot repair or alter unrelated formula bytes.
+
+
 def rewrite_formula(base: bytes, receipt: dict[str, Any], payload_digests: dict[str, str]) -> bytes:
     if not base or len(base) > 1024 * 1024 or any(byte > 0x7F for byte in base):
         raise fail("formula size or encoding invalid")
@@ -309,85 +408,9 @@ def rewrite_formula(base: bytes, receipt: dict[str, Any], payload_digests: dict[
         text = base.decode("ascii")
     except UnicodeDecodeError as error:
         raise fail("formula encoding invalid") from error
-
-    source = receipt["source"]["commit_sha"]
-    version = receipt["version"]["value"]
-    new_base = tuple(int(part) for part in receipt["version"]["base"].split("."))
-    new_count = receipt["version"]["commit_count"]
-    slots = {"source": 0, "version": 0, "urls": 0, "hashes": 0}
-    prior_source: str | None = None
-    prior_version: str | None = None
-    last_url: str | None = None
-    seen: list[str] = []
-    output: list[str] = []
-
-    for line in text.splitlines(keepends=True):
-        if line.startswith("# source-sha:"):
-            if not line.startswith("# source-sha: ") or not line.endswith("\n"):
-                raise fail("unsupported source metadata syntax")
-            old_source = line[len("# source-sha: ") : -1]
-            if not HEX40.fullmatch(old_source):
-                raise fail("formula source SHA malformed")
-            slots["source"] += 1
-            prior_source = old_source
-            output.append(f"# source-sha: {source}\n")
-            continue
-        if line.startswith("  version "):
-            prefix, suffix = '  version "', '"\n'
-            if not line.startswith(prefix) or not line.endswith(suffix):
-                raise fail("unsupported version metadata syntax")
-            old_version = line[len(prefix) : -len(suffix)]
-            parse_old_version(old_version, prior_source or "")
-            slots["version"] += 1
-            prior_version = old_version
-            output.append(f'  version "{version}"\n')
-            continue
-
-        url_prefix = next((prefix for prefix in ('      url "', '    url "') if line.startswith(prefix)), None)
-        if url_prefix is not None:
-            if not line.endswith('"\n'):
-                raise fail("unsupported URL metadata syntax")
-            url = line[len(url_prefix) : -2]
-            old_tag, name = parse_release_url(url)
-            if prior_version is None or old_tag != f"v{prior_version}" or name not in payload_digests:
-                raise fail("formula base release binding mismatch")
-            if name not in seen:
-                seen.append(name)
-            last_url = name
-            slots["urls"] += 1
-            indent = line[: len(line) - len(line.lstrip(" "))]
-            output.append(f'{indent}url "https://github.com/{SOURCE_REPOSITORY}/releases/download/{receipt["tag"]}/{name}"\n')
-            continue
-
-        hash_prefix = next((prefix for prefix in ('      sha256 "', '    sha256 "') if line.startswith(prefix)), None)
-        if hash_prefix is not None:
-            if not line.endswith('"\n'):
-                raise fail("unsupported SHA-256 metadata syntax")
-            old_hash = line[len(hash_prefix) : -2]
-            if not HEX64.fullmatch(old_hash) or last_url is None:
-                raise fail("formula SHA-256 metadata malformed or unpaired")
-            output.append(f'{line[: len(line) - len(line.lstrip(" "))]}sha256 "{payload_digests[last_url]}"\n')
-            slots["hashes"] += 1
-            last_url = None
-            continue
-
-        if line.startswith(("# source-sha:", "  version ", "      url ", "      sha256 ", "    url ", "    sha256 ")):
-            raise fail("unsupported formula metadata syntax")
-        output.append(line)
-
-    if slots["source"] != 1 or slots["version"] != 1 or len(seen) != 6 or slots["urls"] != 6 or slots["hashes"] != 6 or last_url is not None:
-        raise fail("formula metadata inventory mismatch")
-    if set(seen) != set(payload_digests):
-        raise fail("formula payload inventory mismatch")
-    if prior_source is None or prior_version is None:
-        raise fail("formula source or version missing")
-    old_base, old_count = parse_old_version(prior_version, prior_source)
-    if new_base < old_base or (new_base == old_base and new_count < old_count):
-        raise fail("preview formula downgrade")
-    if new_base == old_base and new_count == old_count:
-        if prior_source != source:
-            raise fail("preview formula retry identity conflict")
-        # Retry is exact and cannot repair or alter unrelated formula bytes.
+    rewrite = FormulaRewrite(receipt, payload_digests)
+    output = [rewrite.rewrite_line(line) for line in text.splitlines(keepends=True)]
+    rewrite.validate()
     return "".join(output).encode("ascii")
 
 

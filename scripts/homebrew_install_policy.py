@@ -23,7 +23,7 @@ ARCHIVES = (
     "jackin-capsule-x86_64-unknown-linux-gnu.tar.gz",
 )
 VERSION_RE = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)-preview\.[1-9][0-9]*\+[0-9a-f]{7}\Z")
-VERSION_LINE_RE = re.compile(r'^  version "([^"]+)"$')
+VERSION_LINE_RE = re.compile(r'^ {2}version "([^"]+)"$')
 URL_LINE_RE = re.compile(r'^\s+url "([^"]+)"$')
 URL_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_])url(?![A-Za-z0-9_])")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
@@ -87,6 +87,11 @@ def validate_runtime_alias(repository: Path, check_head: str) -> None:
 
     root = repository.resolve(strict=True)
     formula = root / "Formula/jackin-preview.rb"
+    _validate_alias_layout(root, formula)
+    _validate_checkout_head(root, check_head)
+    _validate_alias_blob(root, check_head)
+
+def _validate_alias_layout(root: Path, formula: Path) -> None:
     formula_parent = root / "Formula"
     alias_parent = root / "Aliases"
     alias_path = root / ALIAS_PATH
@@ -101,6 +106,8 @@ def validate_runtime_alias(repository: Path, check_head: str) -> None:
     if not alias_path.is_symlink() or os.readlink(alias_path) != ALIAS_TARGET.decode("ascii"):
         raise InvalidPreviewFormula("preview alias must be the exact relative formula symlink")
 
+
+def _validate_checkout_head(root: Path, check_head: str) -> None:
     checkout_head = _git(root, "rev-parse", "--verify", "HEAD^{commit}").decode("ascii").strip()
     try:
         checkout_source = _git(root, "rev-parse", "--verify", "HEAD^2^{commit}").decode("ascii").strip()
@@ -109,6 +116,9 @@ def validate_runtime_alias(repository: Path, check_head: str) -> None:
     if check_head not in (checkout_head, checkout_source):
         raise InvalidPreviewFormula("the native check head is not the checkout commit or its PR merge second parent")
 
+
+def _validate_alias_blob(root: Path, check_head: str) -> None:
+    alias_path = root / ALIAS_PATH
     tree_entry = _git(root, "ls-tree", "-z", "--full-tree", check_head, "--", ALIAS_PATH)
     records = tree_entry.split(b"\0")
     if len(records) != 2 or not records[0]:

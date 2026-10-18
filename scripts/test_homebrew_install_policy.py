@@ -18,7 +18,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 MODULE_SPEC = importlib.util.spec_from_file_location(
     "homebrew_install_policy", SCRIPT_DIR / "homebrew_install_policy.py"
 )
-assert MODULE_SPEC is not None and MODULE_SPEC.loader is not None
+assert MODULE_SPEC is not None
+assert MODULE_SPEC.loader is not None
 POLICY = importlib.util.module_from_spec(MODULE_SPEC)
 MODULE_SPEC.loader.exec_module(POLICY)
 
@@ -43,30 +44,55 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         self.assertEqual(self.version, version)
         self.assertCountEqual(self.urls, urls)
 
+    def test_preview_version_rejects_unicode_decimal_digits(self) -> None:
+        version = "10.20.30-preview.40+abcdef0"
+        self.assertIsNotNone(POLICY.VERSION_RE.fullmatch(version))
+        for index in (1, 4, 7, 18):
+            with self.subTest(index=index):
+                unicode_version = version[:index] + "٠" + version[index + 1 :]
+                self.assertIsNone(POLICY.VERSION_RE.fullmatch(unicode_version))
+                formula = self.formula(version=unicode_version)
+                with self.assertRaisesRegex(POLICY.InvalidPreviewFormula, "deterministic immutable preview version"):
+                    POLICY.validate_formula_text(formula)
+
+    def test_url_tokens_keep_ascii_identifier_boundaries(self) -> None:
+        for token in ("éurl", "urlé"):
+            with self.subTest(token=token):
+                formula = self.formula() + f'\n    {token}("https://attacker.invalid/payload.tar.gz")\n'
+                with self.assertRaisesRegex(POLICY.InvalidPreviewFormula, "unsupported or nonliteral URL"):
+                    POLICY.validate_formula_text(formula)
+        self.assertIsNone(POLICY.URL_TOKEN_RE.search("my_url"))
+        self.assertIsNone(POLICY.URL_TOKEN_RE.search("url_suffix"))
+
     def test_rejects_wrong_host_that_contains_trusted_url_as_substring(self) -> None:
         hostile = "https://attacker.invalid/" + self.urls[0]
         urls = (hostile, *self.urls[1:])
+        formula = self.formula(urls)
         with self.assertRaises(POLICY.InvalidPreviewFormula):
-            POLICY.validate_formula_text(self.formula(urls))
+            POLICY.validate_formula_text(formula)
 
     def test_rejects_duplicate_payload_and_missing_payload(self) -> None:
         duplicated = (*self.urls[:5], self.urls[0])
+        formula = self.formula(duplicated)
         with self.assertRaises(POLICY.InvalidPreviewFormula):
-            POLICY.validate_formula_text(self.formula(duplicated))
+            POLICY.validate_formula_text(formula)
+        formula = self.formula(self.urls[:5])
         with self.assertRaises(POLICY.InvalidPreviewFormula):
-            POLICY.validate_formula_text(self.formula(self.urls[:5]))
+            POLICY.validate_formula_text(formula)
 
     def test_rejects_wrong_tag_even_when_asset_names_match(self) -> None:
         wrong_version = "0.6.4-preview.1182+deadbee"
         wrong_prefix = f"https://github.com/jackin-project/jackin/releases/download/v{wrong_version}/"
         wrong_urls = tuple(wrong_prefix + archive for archive in POLICY.ARCHIVES)
+        formula = self.formula(wrong_urls)
         with self.assertRaises(POLICY.InvalidPreviewFormula):
-            POLICY.validate_formula_text(self.formula(wrong_urls))
+            POLICY.validate_formula_text(formula)
 
     def test_rejects_rolling_tag(self) -> None:
         rolling = tuple(url.replace(f"/download/v{self.version}/", "/download/preview/") for url in self.urls)
+        formula = self.formula(rolling)
         with self.assertRaises(POLICY.InvalidPreviewFormula):
-            POLICY.validate_formula_text(self.formula(rolling))
+            POLICY.validate_formula_text(formula)
 
     def test_rejects_alternate_url_call_after_valid_inventory(self) -> None:
         text = self.formula() + '\n    url("https://attacker.invalid/payload.tar.gz")\n'
