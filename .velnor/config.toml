@@ -9,6 +9,13 @@ max_parallel_jobs = 2
 pull_request_cache_policy = "read-only"
 runner_label = "ubuntu-26.04"
 
+[workflow.review_completion]
+provider = "codex-v1"
+check_name = "Review completion"
+app_id_variable = "REVIEW_COMPLETION_APP_ID"
+app_private_key_secret = "REVIEW_COMPLETION_APP_PRIVATE_KEY"
+reviewer_app_id_variable = "REVIEWER_APP_ID"
+
 [resources]
 compiler_process_budget = 2
 test_process_budget = 2
