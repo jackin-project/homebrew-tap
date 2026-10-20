@@ -31,6 +31,7 @@ SHA256_LINE_RE = re.compile(r'^\s+sha256 "([0-9a-f]{64})"$')
 URL_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_])url(?![A-Za-z0-9_])")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
 FORMULA_PATHS = {"preview": "Formula/jackin-preview.rb", "stable": "Formula/jackin.rb"}
+FORMULA_SUPPORT_PATH = "lib/jackin_formula_support.rb"
 
 
 class InvalidReleaseFormula(ValueError):
@@ -116,6 +117,7 @@ def validate_runtime_formula(repository: Path, channel: str, check_head: str) ->
         raise InvalidReleaseFormula("formula must be a regular file contained by the captured repository")
     _validate_checkout_head(root, check_head)
     _validate_captured_formula(root, formula, channel, check_head)
+    _validate_captured_support(root, check_head)
     validate_formula(formula, channel)
 
 
@@ -145,6 +147,38 @@ def _validate_captured_formula(root: Path, formula: Path, channel: str, check_he
     blob = _git(root, "cat-file", "blob", object_id.decode("ascii"))
     if formula.read_bytes() != blob:
         raise InvalidReleaseFormula("working formula differs from the captured source tree")
+
+
+def _validate_captured_support(root: Path, check_head: str) -> None:
+    support = root / FORMULA_SUPPORT_PATH
+    support_parent = root / "lib"
+    try:
+        parent_mode = support_parent.lstat().st_mode
+        metadata = support.lstat()
+        real_parent = support.resolve(strict=True).parent
+    except OSError as error:
+        raise InvalidReleaseFormula("formula support is missing or inaccessible") from error
+    if not stat.S_ISDIR(parent_mode):
+        raise InvalidReleaseFormula("formula support parent must be a real directory")
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        raise InvalidReleaseFormula("formula support must be a regular single-link file")
+    if real_parent != support_parent:
+        raise InvalidReleaseFormula("formula support must be contained by the captured repository")
+
+    tree_entry = _git(root, "ls-tree", "-z", "--full-tree", check_head, "--", FORMULA_SUPPORT_PATH)
+    records = tree_entry.split(b"\0")
+    if len(records) != 2 or not records[0]:
+        raise InvalidReleaseFormula("captured source tree must contain exactly one formula support file")
+    metadata, separator, name = records[0].partition(b"\t")
+    fields = metadata.split()
+    if separator != b"\t" or name != FORMULA_SUPPORT_PATH.encode("ascii") or len(fields) != 3:
+        raise InvalidReleaseFormula("captured formula support tree entry is malformed")
+    mode, object_type, object_id = fields
+    if mode not in (b"100644", b"100755") or object_type != b"blob":
+        raise InvalidReleaseFormula("captured formula support must be a regular file blob")
+    blob = _git(root, "cat-file", "blob", object_id.decode("ascii"))
+    if support.read_bytes() != blob:
+        raise InvalidReleaseFormula("formula support differs from the captured source tree")
 
 
 if __name__ == "__main__":

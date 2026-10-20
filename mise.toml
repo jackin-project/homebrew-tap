@@ -38,7 +38,7 @@ run = "./scripts/test-homebrew-install.sh"
 
 [tasks.build]
 # POSIX /bin/sh (CI dash): no pipefail. Avoid `${#...}`: mise Tera treats `{#` as a comment.
-run = "set -e; for f in Formula/*.rb; do ruby -c \"$f\"; done; if [ -d Casks ]; then for f in Casks/*.rb; do [ -e \"$f\" ] || continue; ruby -c \"$f\"; done; fi"
+run = "set -e; for f in Formula/*.rb lib/*.rb; do [ -e \"$f\" ] || continue; ruby -c \"$f\"; done; if [ -d Casks ]; then for f in Casks/*.rb; do [ -e \"$f\" ] || continue; ruby -c \"$f\"; done; fi"
 
 [tasks.reuse-lint]
 run = "reuse lint"

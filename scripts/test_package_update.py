@@ -50,6 +50,19 @@ def sha256(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def assert_shared_formula_install(test: unittest.TestCase, formula: bytes) -> None:
+    test.assertIn(b'require_relative "../lib/jackin_formula_support"', formula)
+    test.assertIn(b"JackinFormulaSupport.build", formula)
+    test.assertIn(b"jackin_package_test", formula)
+    test.assertNotIn(b'bin.install "jackin-usage-broker"', formula)
+    support = (ROOT / "lib/jackin_formula_support.rb").read_bytes()
+    for executable in ("jackin", "jackin-role", "jackin-usage-broker"):
+        test.assertIn(f'bin.install "{executable}"'.encode(), support)
+    test.assertIn(b"File.realpath(__FILE__)", support)
+    test.assertIn(b"lib.mkpath", support)
+    test.assertIn(b'FileUtils.cp(helper_source, lib/"jackin_formula_support.rb")', support)
+
+
 def fixture_receipt(
     source_sha: str = SOURCE_NEW,
     count: int = 42,
@@ -313,7 +326,7 @@ class PreviewUpdaterTest(unittest.TestCase):
         self.assertIn(f"# source-sha: {SOURCE_NEW}".encode(), first)
         self.assertIn(b'version "0.6.4-preview.42+abcdef0"', first)
         self.assertIn(b"releases/download/preview/", first)
-        self.assertIn(b'bin.install "jackin-usage-broker"', first)
+        assert_shared_formula_install(self, first)
         actual_urls = re.findall(rb"releases/download/preview/([^\"]+)", first)
         actual_hashes = re.findall(rb'^\s+sha256 "([0-9a-f]{64})"$', first, re.MULTILINE)
         expected_hashes = {
@@ -355,7 +368,7 @@ class PreviewUpdaterTest(unittest.TestCase):
         self.assertIn(b'  version "0.6.4"', first)
         self.assertNotIn(b'  version "0.0.0"', first)
         self.assertIn(b'if version.to_s == "0.0.0"', first)
-        self.assertIn(b'bin.install "jackin-usage-broker"', first)
+        assert_shared_formula_install(self, first)
         self.assertEqual(6, len(re.findall(rb"releases/download/v0\.6\.4/", first)))
         expected_hashes = {
             asset["name"]: asset["sha256"] for asset in receipt["assets"] if asset["kind"] == "payload"

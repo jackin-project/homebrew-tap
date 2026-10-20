@@ -49,6 +49,7 @@ export HOMEBREW_NO_INSTALL_CLEANUP=1
 export HOMEBREW_NO_ANALYTICS=1
 export HOMEBREW_NO_ENV_HINTS=1
 
+"$BREW" ruby "$root/scripts/test_homebrew_formulary_keg.rb" "$root"
 "$BREW" tap jackin-project/tap "$root"
 "$BREW" trust --tap jackin-project/tap
 "$BREW" install --formula --force "$formula"

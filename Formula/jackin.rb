@@ -1,5 +1,7 @@
 # source-sha: 0000000000000000000000000000000000000000
 class Jackin < Formula
+  require_relative "../lib/jackin_formula_support"
+  include JackinFormulaSupport.build
   desc "CLI for orchestrating autonomous AI coding agents"
   homepage "https://github.com/jackin-project/jackin"
   version "0.0.0"
@@ -41,37 +43,7 @@ class Jackin < Formula
     sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   end
 
-  def install
-    bin.install "jackin"
-    bin.install "jackin-role"
-    bin.install "jackin-usage-broker"
-    capsule_target = Hardware::CPU.arm? ? "aarch64-unknown-linux-gnu" : "x86_64-unknown-linux-gnu"
-    capsule_arch = Hardware::CPU.arm? ? "arm64" : "amd64"
-    resource("jackin-capsule-#{capsule_target}").stage do
-      capsule_dir = libexec/"jackin-capsule/linux-#{capsule_arch}"
-      capsule_dir.install "jackin-capsule"
-      chmod 0755, capsule_dir/"jackin-capsule"
-    end
-  end
-
   test do
-    assert_match version.to_s, shell_output("#{bin}/jackin --version")
-    assert_match version.to_s, shell_output("#{bin}/jackin-role --version")
-    assert_match version.to_s, shell_output("#{bin}/jackin-usage-broker --version")
-    assert_predicate bin/"jackin-role", :executable?
-    assert_predicate bin/"jackin-usage-broker", :executable?
-
-    capsule_target = Hardware::CPU.arm? ? "arm64" : "amd64"
-    capsule = libexec/"jackin-capsule/linux-#{capsule_target}/jackin-capsule"
-    assert_predicate capsule, :executable?
-    capsule_header = File.binread(capsule, 20)
-    assert_equal "\x7fELF".b, capsule_header.byteslice(0, 4)
-    assert_equal 2, capsule_header.getbyte(4)
-    assert_equal 1, capsule_header.getbyte(5)
-    expected_machine = Hardware::CPU.arm? ? 183 : 62
-    assert_equal expected_machine, capsule_header.byteslice(18, 2).unpack1("v")
-    if OS.linux?
-      assert_match version.to_s, shell_output("#{capsule} --version")
-    end
+    jackin_package_test
   end
 end

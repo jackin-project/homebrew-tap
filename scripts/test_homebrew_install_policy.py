@@ -153,8 +153,12 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         repository = Path(temporary.name)
         (repository / "Formula").mkdir()
+        (repository / "lib").mkdir()
         (repository / "Formula/jackin-preview.rb").write_text(self.formula(), encoding="utf-8")
         (repository / "Formula/jackin.rb").write_text(self.stable_formula(), encoding="utf-8")
+        (repository / POLICY.FORMULA_SUPPORT_PATH).write_bytes(
+            (SCRIPT_DIR.parent / POLICY.FORMULA_SUPPORT_PATH).read_bytes()
+        )
         self.git(repository, "init", "-q")
         self.git(repository, "config", "user.name", "Test")
         self.git(repository, "config", "user.email", "test@example.invalid")
@@ -177,6 +181,38 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         with temporary:
             POLICY.validate_runtime_formula(repository, "preview", head)
             POLICY.validate_runtime_formula(repository, "stable", head)
+
+    def test_rejects_missing_formula_support(self) -> None:
+        temporary, repository, head = self.make_repository()
+        with temporary:
+            (repository / POLICY.FORMULA_SUPPORT_PATH).unlink()
+            with self.assertRaisesRegex(POLICY.InvalidReleaseFormula, "formula support"):
+                POLICY.validate_runtime_formula(repository, "preview", head)
+
+    def test_rejects_formula_support_symlink(self) -> None:
+        temporary, repository, head = self.make_repository()
+        with temporary:
+            support = repository / POLICY.FORMULA_SUPPORT_PATH
+            support.unlink()
+            support.symlink_to(repository / "Formula/jackin-preview.rb")
+            with self.assertRaisesRegex(POLICY.InvalidReleaseFormula, "single-link"):
+                POLICY.validate_runtime_formula(repository, "preview", head)
+
+    def test_rejects_formula_support_hardlink(self) -> None:
+        temporary, repository, head = self.make_repository()
+        with temporary:
+            support = repository / POLICY.FORMULA_SUPPORT_PATH
+            (repository / "support-copy.rb").hardlink_to(support)
+            with self.assertRaisesRegex(POLICY.InvalidReleaseFormula, "single-link"):
+                POLICY.validate_runtime_formula(repository, "preview", head)
+
+    def test_rejects_formula_support_bytes_changed_after_captured_head(self) -> None:
+        temporary, repository, head = self.make_repository()
+        with temporary:
+            support = repository / POLICY.FORMULA_SUPPORT_PATH
+            support.write_bytes(support.read_bytes() + b"\n# altered\n")
+            with self.assertRaisesRegex(POLICY.InvalidReleaseFormula, "differs from the captured source tree"):
+                POLICY.validate_runtime_formula(repository, "preview", head)
 
     def test_rejects_formula_symlink(self) -> None:
         temporary, repository, _head = self.make_repository()
@@ -214,6 +250,7 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         check_id: str | None = None,
         platform: str = "macos_arm64",
         stable_formula: str | None = None,
+        support_attack: str | None = None,
     ) -> tuple[subprocess.CompletedProcess[bytes], list[str], bool]:
         temporary, repository, _ = self.make_repository()
         with temporary:
@@ -226,6 +263,8 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
             policy = scripts / "homebrew_install_policy.py"
             policy.write_bytes((SCRIPT_DIR / "homebrew_install_policy.py").read_bytes())
             policy.chmod(0o755)
+            support = repository / POLICY.FORMULA_SUPPORT_PATH
+            support.write_bytes((SCRIPT_DIR.parent / POLICY.FORMULA_SUPPORT_PATH).read_bytes())
             install_script = scripts / "test-homebrew-install.sh"
             script_text = (SCRIPT_DIR / "test-homebrew-install.sh").read_text(encoding="utf-8")
             production_brew = 'BREW="/opt/homebrew/bin/brew"'
@@ -238,6 +277,16 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
             self.git(repository, "add", ".")
             self.git(repository, "commit", "-qm", "gate fixture")
             check_head = self.git(repository, "rev-parse", "HEAD").decode().strip()
+            support = repository / POLICY.FORMULA_SUPPORT_PATH
+            if support_attack == "tamper":
+                support.write_bytes(support.read_bytes() + b"\n# altered\n")
+            elif support_attack == "missing":
+                support.unlink()
+            elif support_attack == "symlink":
+                support.unlink()
+                support.symlink_to(repository / "Formula/jackin-preview.rb")
+            elif support_attack == "hardlink":
+                (repository / "support-copy.rb").hardlink_to(support)
             fake_bin = repository / "owned/bin"
             fake_bin.mkdir(parents=True)
             log = repository / "brew.log"
@@ -288,14 +337,16 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
     def test_preview_channel_defaults_and_installs_only_the_rolling_formula(self) -> None:
         result, commands, _log_exists = self.run_install_gate(self.formula(), "captured")
         self.assertEqual(0, result.returncode, result.stderr.decode())
-        self.assertEqual("install --formula --force jackin-preview", commands[2])
-        self.assertEqual("test --formula jackin-preview", commands[3])
+        self.assertRegex(commands[0], r"^ruby .*/scripts/test_homebrew_formulary_keg\.rb .+$")
+        self.assertEqual("install --formula --force jackin-preview", commands[3])
+        self.assertEqual("test --formula jackin-preview", commands[4])
 
     def test_stable_channel_installs_only_the_stable_formula(self) -> None:
         result, commands, _log_exists = self.run_install_gate(self.stable_formula(), "captured", channel="stable")
         self.assertEqual(0, result.returncode, result.stderr.decode())
-        self.assertEqual("install --formula --force jackin", commands[2])
-        self.assertEqual("test --formula jackin", commands[3])
+        self.assertRegex(commands[0], r"^ruby .*/scripts/test_homebrew_formulary_keg\.rb .+$")
+        self.assertEqual("install --formula --force jackin", commands[3])
+        self.assertEqual("test --formula jackin", commands[4])
 
     def test_unreleased_stable_sentinel_is_rejected_before_any_brew_command(self) -> None:
         result, _commands, log_exists = self.run_install_gate(
@@ -321,15 +372,15 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
     def test_homebrew_trust_occurs_after_validation_before_install(self) -> None:
         result, commands, _log_exists = self.run_install_gate(self.formula(), "captured")
         self.assertEqual(0, result.returncode, result.stderr.decode())
-        self.assertEqual(4, len(commands))
-        self.assertTrue(commands[0].startswith("tap jackin-project/tap "))
+        self.assertEqual(5, len(commands))
+        self.assertTrue(commands[1].startswith("tap jackin-project/tap "))
         self.assertEqual(
             [
                 "trust --tap jackin-project/tap",
                 "install --formula --force jackin-preview",
                 "test --formula jackin-preview",
             ],
-            commands[1:],
+            commands[2:],
         )
 
     def test_rejected_url_syntax_stops_before_brew_can_run(self) -> None:
@@ -347,6 +398,15 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         result, _commands, log_exists = self.run_install_gate(formula, "captured")
         self.assertNotEqual(0, result.returncode)
         self.assertFalse(log_exists)
+
+    def test_formula_support_tamper_and_link_attacks_stop_before_brew(self) -> None:
+        for attack in ("tamper", "missing", "symlink", "hardlink"):
+            with self.subTest(attack=attack):
+                result, _commands, log_exists = self.run_install_gate(
+                    self.formula(), "captured", support_attack=attack
+                )
+                self.assertNotEqual(0, result.returncode)
+                self.assertFalse(log_exists)
 
 
 if __name__ == "__main__":
