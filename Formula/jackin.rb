@@ -8,7 +8,7 @@ class Jackin < Formula
   version "0.0.0"
   license "Apache-2.0"
 
-  disable! date: "2026-10-21", because: "has no native stable release yet" if version.to_s == "0.0.0"
+  disable! date: "2026-10-20", because: "has no native stable release yet" if version.to_s == "0.0.0"
 
   on_macos do
     on_arm do
