@@ -9,6 +9,9 @@ require "formulary"
 
 FORMULA_SUPPORT_FILENAME = "jackin_formula_support.rb"
 
+class FixtureAssertionError < StandardError
+end
+
 tap = Pathname.new(ARGV.fetch(0)).realpath
 Dir.mktmpdir("jackin-formulary-kegs") do |temporary|
   root = Pathname.new(temporary)
@@ -24,12 +27,12 @@ Dir.mktmpdir("jackin-formulary-kegs") do |temporary|
     helper_source = File.read(tap/"lib"/FORMULA_SUPPORT_FILENAME)
     injected_revision = "    Module.new do\n      define_method(:jackin_helper_revision) { #{marker.dump} }\n"
     helper_source = helper_source.sub("    Module.new do\n", injected_revision)
-    raise RuntimeError, "could not create distinct archived helper fixture" if helper_source == File.read(tap/"lib"/FORMULA_SUPPORT_FILENAME)
+    raise FixtureAssertionError, "could not create distinct archived helper fixture" if helper_source == File.read(tap/"lib"/FORMULA_SUPPORT_FILENAME)
     File.write(helper, helper_source)
     formula = Formulary.from_contents(name, recipe, recipe.read)
     expected = helper.to_s
-    raise RuntimeError, "archived install method did not load from the keg helper" unless formula.method(:install).source_location.first == expected
-    raise RuntimeError, "archived assertions did not load from the keg helper" unless formula.method(:jackin_package_test).source_location.first == expected
+    raise FixtureAssertionError, "archived install method did not load from the keg helper" unless formula.method(:install).source_location.first == expected
+    raise FixtureAssertionError, "archived assertions did not load from the keg helper" unless formula.method(:jackin_package_test).source_location.first == expected
     [formula, helper]
   end
 
@@ -47,24 +50,24 @@ Dir.mktmpdir("jackin-formulary-kegs") do |temporary|
     "jackin", updated_source, "jackin-updated", "stable-helper-v3"
   )
 
-  raise RuntimeError, "archived recipes share mutable helper modules" if stable.method(:install).owner == preview.method(:install).owner
-  raise RuntimeError, "updated stable recipe shares a mutable helper module" if stable.method(:install).owner == updated_stable.method(:install).owner
-  raise RuntimeError, "later recipe changed stable helper binding" unless stable.method(:install).source_location == stable_install
-  raise RuntimeError, "later recipe changed stable assertion binding" unless stable.method(:jackin_package_test).source_location == stable_assertions
-  raise RuntimeError, "later helper version replaced stable implementation" unless stable.jackin_helper_revision == "stable-helper-v1"
-  raise RuntimeError, "preview helper version was not isolated" unless preview.jackin_helper_revision == "preview-helper-v2"
-  raise RuntimeError, "updated stable helper version was not isolated" unless updated_stable.jackin_helper_revision == "stable-helper-v3"
-  raise RuntimeError, "preview install method is not keg-local" unless preview.method(:install).source_location.first == preview_helper.to_s
-  raise RuntimeError, "stable install method is not keg-local" unless stable_install.first == stable_helper.to_s
-  raise RuntimeError, "stable sentinel disable state does not follow its version" unless stable.disabled? == (stable.version.to_s == "0.0.0")
-  raise RuntimeError, "updated stable release should be enabled" if updated_stable.disabled?
-  raise RuntimeError, "updated stable helper is not keg-local" unless updated_stable.method(:install).source_location.first == updated_stable_helper.to_s
+  raise FixtureAssertionError, "archived recipes share mutable helper modules" if stable.method(:install).owner == preview.method(:install).owner
+  raise FixtureAssertionError, "updated stable recipe shares a mutable helper module" if stable.method(:install).owner == updated_stable.method(:install).owner
+  raise FixtureAssertionError, "later recipe changed stable helper binding" unless stable.method(:install).source_location == stable_install
+  raise FixtureAssertionError, "later recipe changed stable assertion binding" unless stable.method(:jackin_package_test).source_location == stable_assertions
+  raise FixtureAssertionError, "later helper version replaced stable implementation" unless stable.jackin_helper_revision == "stable-helper-v1"
+  raise FixtureAssertionError, "preview helper version was not isolated" unless preview.jackin_helper_revision == "preview-helper-v2"
+  raise FixtureAssertionError, "updated stable helper version was not isolated" unless updated_stable.jackin_helper_revision == "stable-helper-v3"
+  raise FixtureAssertionError, "preview install method is not keg-local" unless preview.method(:install).source_location.first == preview_helper.to_s
+  raise FixtureAssertionError, "stable install method is not keg-local" unless stable_install.first == stable_helper.to_s
+  raise FixtureAssertionError, "stable sentinel disable state does not follow its version" unless stable.disabled? == (stable.version.to_s == "0.0.0")
+  raise FixtureAssertionError, "updated stable release should be enabled" if updated_stable.disabled?
+  raise FixtureAssertionError, "updated stable helper is not keg-local" unless updated_stable.method(:install).source_location.first == updated_stable_helper.to_s
   expected_resources = [
     "jackin-capsule-aarch64-unknown-linux-gnu",
     "jackin-capsule-x86_64-unknown-linux-gnu",
   ]
-  raise RuntimeError, "stable capsule resource inventory changed" unless stable.resources.map(&:name).sort == expected_resources
-  raise RuntimeError, "preview capsule resource inventory changed" unless preview.resources.map(&:name).sort == expected_resources
+  raise FixtureAssertionError, "stable capsule resource inventory changed" unless stable.resources.map(&:name).sort == expected_resources
+  raise FixtureAssertionError, "preview capsule resource inventory changed" unless preview.resources.map(&:name).sort == expected_resources
 
   install_from_local_fixtures = lambda do |formula, helper, label|
     source = root/"inputs-#{label}"
@@ -90,11 +93,11 @@ Dir.mktmpdir("jackin-formulary-kegs") do |temporary|
 
     FileUtils.cp(helper, root/"before-#{label}.rb")
     Dir.chdir(source) { formula.install }
-    raise RuntimeError, "formula install removed its captured helper" unless helper.file?
-    raise RuntimeError, "formula install changed its captured helper" unless helper.binread == File.binread(root/"before-#{label}.rb")
+    raise FixtureAssertionError, "formula install removed its captured helper" unless helper.file?
+    raise FixtureAssertionError, "formula install changed its captured helper" unless helper.binread == File.binread(root/"before-#{label}.rb")
     installed_helper = lib_path/FORMULA_SUPPORT_FILENAME
-    raise RuntimeError, "formula install did not copy the helper into keg/lib" unless installed_helper.file?
-    raise RuntimeError, "installed helper bytes differ from the loaded source" unless installed_helper.binread == helper.binread
+    raise FixtureAssertionError, "formula install did not copy the helper into keg/lib" unless installed_helper.file?
+    raise FixtureAssertionError, "installed helper bytes differ from the loaded source" unless installed_helper.binread == helper.binread
   end
 
   install_from_local_fixtures.call(stable, stable_helper, "stable")
