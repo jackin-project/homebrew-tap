@@ -5,11 +5,26 @@ set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 BREW="/opt/homebrew/bin/brew"
+release_channel="${VELNOR_TAP_CHANNEL:-preview}"
+case "$release_channel" in
+  preview)
+    expected_check_id="homebrew-preview-install"
+    formula="jackin@preview"
+    ;;
+  stable)
+    expected_check_id="homebrew-stable-install"
+    formula="jackin"
+    ;;
+  *)
+    printf '%s\n' 'Homebrew installation test received an unsupported release channel.' >&2
+    exit 2
+    ;;
+esac
 
-if [[ "${VELNOR_CHECK_ID:-}" != "homebrew-preview-install" \
+if [[ "${VELNOR_CHECK_ID:-}" != "$expected_check_id" \
   || "${VELNOR_CHECK_PLATFORM:-}" != "macos_arm64" \
   || ! "${VELNOR_CHECK_HEAD:-}" =~ ^[0-9a-f]{40}$ ]]; then
-  printf '%s\n' 'Homebrew preview installation test requires the native macos_arm64 Velnor check context.' >&2
+  printf '%s\n' 'Homebrew installation test requires the selected native macos_arm64 Velnor check context.' >&2
   exit 2
 fi
 
@@ -20,7 +35,7 @@ if [[ "$VELNOR_CHECK_HEAD" != "$checkout_head" && "$VELNOR_CHECK_HEAD" != "$merg
   exit 2
 fi
 
-if ! PYTHONDONTWRITEBYTECODE=1 python "$root/scripts/homebrew_install_policy.py" "$root"; then
+if ! PYTHONDONTWRITEBYTECODE=1 python "$root/scripts/homebrew_install_policy.py" "$root" "$release_channel"; then
   exit 2
 fi
 
@@ -36,5 +51,5 @@ export HOMEBREW_NO_ENV_HINTS=1
 
 "$BREW" tap jackin-project/tap "$root"
 "$BREW" trust --tap jackin-project/tap
-"$BREW" install --formula --force jackin@preview
-"$BREW" test --formula jackin@preview
+"$BREW" install --formula --force "$formula"
+"$BREW" test --formula "$formula"

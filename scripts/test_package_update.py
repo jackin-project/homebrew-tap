@@ -320,40 +320,49 @@ class PreviewUpdaterTest(unittest.TestCase):
         self.assertEqual(0, retry.returncode, retry.stderr)
         self.assertEqual(first, self.formula.read_bytes())
 
-    def assert_rejected_without_formula_write(self, env: dict[str, str] | None = None) -> str:
+    def assert_rejected_without_formula_write(
+        self, env: dict[str, str] | None = None, reason: str | None = None
+    ) -> str:
         result = self.run_updater(env)
         self.assertNotEqual(0, result.returncode)
+        if reason is not None:
+            self.assertIn(reason, result.stderr)
         self.assertEqual(self.initial, self.formula.read_bytes())
         return result.stderr
 
     def test_tampered_receipt_digest_and_handoff_identities_reject_without_write(self) -> None:
+        self.make_handoff()
         self.receipt_path.write_bytes(self.receipt_path.read_bytes() + b" ")
-        self.assert_rejected_without_formula_write()
+        self.assert_rejected_without_formula_write(reason="receipt digest mismatch")
 
-        for key, value in (
-            ("VELNOR_TAP_RELEASE_VERSION", "0.6.4-preview.43+abcdef0"),
-            ("VELNOR_TAP_RELEASE_TAG", "v0.6.4-preview.43+abcdef0"),
-            ("VELNOR_TAP_SOURCE_SHA", SOURCE_TAMPERED),
-            ("VELNOR_TAP_BASE_SHA", "bad"),
-            ("VELNOR_TAP_FORMULA_PATH", "Formula/evil.rb"),
+        for key, value, reason in (
+            ("VELNOR_TAP_RELEASE_VERSION", "0.6.4-preview.43+abcdef0", "handoff identity differs from receipt"),
+            ("VELNOR_TAP_RELEASE_TAG", "v0.6.4-preview.43+abcdef0", "handoff identity differs from receipt"),
+            ("VELNOR_TAP_SOURCE_SHA", SOURCE_TAMPERED, "handoff identity differs from receipt"),
+            ("VELNOR_TAP_BASE_SHA", "bad", "handoff digest or commit identity malformed"),
+            ("VELNOR_TAP_FORMULA_PATH", "Formula/evil.rb", "unexpected formula path"),
         ):
             with self.subTest(key=key):
-                env = self.env.copy()
+                env = self.make_handoff()
                 env[key] = value
-                self.assert_rejected_without_formula_write(env)
+                self.assert_rejected_without_formula_write(env, reason)
 
         for key in updater.ENVIRONMENT:
             with self.subTest(missing=key):
-                env = self.env.copy()
+                env = self.make_handoff()
                 env.pop(key)
-                self.assert_rejected_without_formula_write(env)
+                self.assert_rejected_without_formula_write(env, "missing Velnor handoff field")
 
     def test_tampered_plan_digest_and_channel_destination_reject_without_write(self) -> None:
         self.plan_path.write_bytes(self.plan_path.read_bytes() + b" ")
         self.assert_rejected_without_formula_write()
-        env = self.env.copy()
+        env = self.make_handoff()
+        original = self.formula.read_bytes()
         env["VELNOR_TAP_FORMULA_PATH"] = updater.FORMULA_PATHS["stable"]
-        self.assert_rejected_without_formula_write(env)
+        result = self.run_updater(env)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("release channel formula destination mismatch", result.stderr)
+        self.assertEqual(original, self.formula.read_bytes())
 
     def test_tampered_receipt_inventory_is_rejected_even_with_recomputed_handoff_digest(self) -> None:
         for mutation in (

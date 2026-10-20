@@ -40,6 +40,11 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         source_sha = (actual_version.rsplit("+", 1)[1] + "1" * 33) if "+" in actual_version else "a" * 40
         return '\n'.join((f'# source-sha: {source_sha}', f'  version "{actual_version}"', *(f'      url "{url}"' for url in actual_urls)))
 
+    def stable_formula(self) -> str:
+        version = "0.7.0"
+        prefix = f"https://github.com/jackin-project/jackin/releases/download/v{version}/"
+        return self.formula(tuple(prefix + archive for archive in POLICY.ARCHIVES), version)
+
     def test_accepts_exact_rolling_preview_six_asset_inventory(self) -> None:
         version, urls = POLICY.validate_formula_text(self.formula())
         self.assertEqual(self.version, version)
@@ -196,12 +201,14 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         formula: str,
         head: str,
         *,
-        check_id: str = "homebrew-preview-install",
+        channel: str | None = None,
+        check_id: str | None = None,
         platform: str = "macos_arm64",
     ) -> tuple[subprocess.CompletedProcess[bytes], list[str], bool]:
         temporary, repository, _ = self.make_repository()
         with temporary:
             (repository / "Formula/jackin-preview.rb").write_text(formula, encoding="utf-8")
+            (repository / "Formula/jackin.rb").write_text(self.stable_formula(), encoding="utf-8")
             scripts = repository / "scripts"
             scripts.mkdir()
             policy = scripts / "homebrew_install_policy.py"
@@ -233,10 +240,12 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
             python.chmod(0o755)
             env = {
                 "PATH": f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin",
-                "VELNOR_CHECK_ID": check_id,
+                "VELNOR_CHECK_ID": check_id or ("homebrew-stable-install" if channel == "stable" else "homebrew-preview-install"),
                 "VELNOR_CHECK_PLATFORM": platform,
                 "VELNOR_CHECK_HEAD": check_head if head == "captured" else head,
             }
+            if channel is not None:
+                env["VELNOR_TAP_CHANNEL"] = channel
             result = subprocess.run(
                 (str(scripts / "test-homebrew-install.sh"),),
                 cwd=repository,
@@ -264,6 +273,31 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
                 self.assertNotEqual(0, result.returncode)
                 self.assertFalse(log_exists)
 
+    def test_preview_channel_defaults_and_installs_only_the_rolling_formula(self) -> None:
+        result, commands, _log_exists = self.run_install_gate(self.formula(), "captured")
+        self.assertEqual(0, result.returncode, result.stderr.decode())
+        self.assertEqual("install --formula --force jackin@preview", commands[2])
+        self.assertEqual("test --formula jackin@preview", commands[3])
+
+    def test_stable_channel_installs_only_the_stable_formula(self) -> None:
+        result, commands, _log_exists = self.run_install_gate(self.stable_formula(), "captured", channel="stable")
+        self.assertEqual(0, result.returncode, result.stderr.decode())
+        self.assertEqual("install --formula --force jackin", commands[2])
+        self.assertEqual("test --formula jackin", commands[3])
+
+    def test_channel_and_native_check_must_match_before_brew_runs(self) -> None:
+        for channel, check_id in (
+            ("stable", "homebrew-preview-install"),
+            ("preview;touch injected", "homebrew-preview-install"),
+            ("../../Formula/evil.rb", "homebrew-preview-install"),
+        ):
+            with self.subTest(channel=channel):
+                result, _commands, log_exists = self.run_install_gate(
+                    self.formula(), "captured", channel=channel, check_id=check_id
+                )
+                self.assertNotEqual(0, result.returncode)
+                self.assertFalse(log_exists)
+
     def test_homebrew_trust_occurs_after_validation_before_install(self) -> None:
         result, commands, _log_exists = self.run_install_gate(self.formula(), "captured")
         self.assertEqual(0, result.returncode, result.stderr.decode())
@@ -280,6 +314,16 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
 
     def test_rejected_url_syntax_stops_before_brew_can_run(self) -> None:
         formula = self.formula() + '\n    url("https://attacker.invalid/payload.tar.gz")\n'
+        result, _commands, log_exists = self.run_install_gate(formula, "captured")
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse(log_exists)
+
+    def test_tampered_source_checksum_stops_before_brew_can_run(self) -> None:
+        formula = self.formula()
+        source = re.search(r"(?m)^# source-sha: ([0-9a-f]{40})$", formula)
+        self.assertIsNotNone(source)
+        tampered_sha = "f" + source.group(1)[1:]
+        formula = formula.replace(source.group(1), tampered_sha, 1)
         result, _commands, log_exists = self.run_install_gate(formula, "captured")
         self.assertNotEqual(0, result.returncode)
         self.assertFalse(log_exists)
