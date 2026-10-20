@@ -38,12 +38,19 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         actual_version = self.version if version is None else version
         actual_urls = self.urls if urls is None else urls
         source_sha = (actual_version.rsplit("+", 1)[1] + "1" * 33) if "+" in actual_version else "a" * 40
-        return '\n'.join((f'# source-sha: {source_sha}', f'  version "{actual_version}"', *(f'      url "{url}"' for url in actual_urls)))
+        lines = [f"# source-sha: {source_sha}", f'  version "{actual_version}"']
+        for url in actual_urls:
+            lines.extend((f'      url "{url}"', f'      sha256 "{"b" * 64}"'))
+        return "\n".join(lines)
 
     def stable_formula(self) -> str:
         version = "0.7.0"
         prefix = f"https://github.com/jackin-project/jackin/releases/download/v{version}/"
         return self.formula(tuple(prefix + archive for archive in POLICY.ARCHIVES), version)
+
+    @staticmethod
+    def stable_sentinel_formula() -> str:
+        return (SCRIPT_DIR.parent / "Formula/jackin.rb").read_text(encoding="utf-8")
 
     def test_accepts_exact_rolling_preview_six_asset_inventory(self) -> None:
         version, urls = POLICY.validate_formula_text(self.formula())
@@ -109,6 +116,23 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         self.assertEqual(6, len(urls))
         with self.assertRaises(POLICY.InvalidReleaseFormula):
             POLICY.validate_formula_text(formula, "preview")
+
+    def test_stable_formula_requires_published_release_identity_and_checksums(self) -> None:
+        sentinel = self.stable_sentinel_formula()
+        with self.assertRaisesRegex(POLICY.InvalidReleaseFormula, "does not identify a published release"):
+            POLICY.validate_formula_text(sentinel, "stable")
+
+        nonzero_source_sentinel = re.sub(r"(?m)^# source-sha: 0{40}$", "# source-sha: " + "a" * 40, sentinel)
+        with self.assertRaisesRegex(POLICY.InvalidReleaseFormula, "does not identify a published release"):
+            POLICY.validate_formula_text(nonzero_source_sentinel, "stable")
+
+        unreleased = sentinel.replace("0.0.0", "0.6.4")
+        with self.assertRaisesRegex(POLICY.InvalidReleaseFormula, "does not identify a published release"):
+            POLICY.validate_formula_text(unreleased, "stable")
+
+        nonzero_source = re.sub(r"(?m)^# source-sha: 0{40}$", "# source-sha: " + "a" * 40, unreleased)
+        with self.assertRaisesRegex(POLICY.InvalidReleaseFormula, "nonzero SHA-256"):
+            POLICY.validate_formula_text(nonzero_source, "stable")
 
     def test_rejects_preview_source_comment_that_disagrees_with_version(self) -> None:
         text = self.formula().replace("# source-sha: ", "# source-sha: f", 1)
@@ -189,11 +213,14 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         channel: str | None = None,
         check_id: str | None = None,
         platform: str = "macos_arm64",
+        stable_formula: str | None = None,
     ) -> tuple[subprocess.CompletedProcess[bytes], list[str], bool]:
         temporary, repository, _ = self.make_repository()
         with temporary:
             (repository / "Formula/jackin-preview.rb").write_text(formula, encoding="utf-8")
-            (repository / "Formula/jackin.rb").write_text(self.stable_formula(), encoding="utf-8")
+            (repository / "Formula/jackin.rb").write_text(
+                self.stable_formula() if stable_formula is None else stable_formula, encoding="utf-8"
+            )
             scripts = repository / "scripts"
             scripts.mkdir()
             policy = scripts / "homebrew_install_policy.py"
@@ -269,6 +296,14 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr.decode())
         self.assertEqual("install --formula --force jackin", commands[2])
         self.assertEqual("test --formula jackin", commands[3])
+
+    def test_unreleased_stable_sentinel_is_rejected_before_any_brew_command(self) -> None:
+        result, _commands, log_exists = self.run_install_gate(
+            self.formula(), "captured", channel="stable", stable_formula=self.stable_sentinel_formula()
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(b"does not identify a published release", result.stderr)
+        self.assertFalse(log_exists)
 
     def test_channel_and_native_check_must_match_before_brew_runs(self) -> None:
         for channel, check_id in (

@@ -13,7 +13,11 @@ brew install jackin-preview
 brew install jackin-dev
 ```
 
-The stable `jackin` formula is intentionally disabled until the first stable release.
+The stable `jackin` formula starts with an explicit `0.0.0` unpublished sentinel.
+The native install gate rejects that sentinel before invoking Homebrew, including
+when `brew install --force` would otherwise bypass Homebrew's disabled-formula
+notice. A verified stable-release handoff replaces it with permanent versioned
+release URLs and checksums.
 Install `jackin-dev` alongside the preview CLI when you need the local pull request verification helper.
 
 Homebrew can refuse to load formulae from taps that have not been trusted. Run `brew trust jackin-project/tap` once after tapping this repository.

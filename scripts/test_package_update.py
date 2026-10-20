@@ -22,6 +22,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 UPDATER = ROOT / "scripts/package-update.py"
 FORMULA = ROOT / "Formula/jackin-preview.rb"
+STABLE_FORMULA = ROOT / "Formula/jackin.rb"
 SCRIPT = ROOT / "scripts/package-update.sh"
 SOURCE_OLD = "0123456" + "1" * 33
 SOURCE_NEW = "abcdef0" + "2" * 33
@@ -150,19 +151,39 @@ def fixture_receipt(
     }
 
 
-def fixture_plan(channel: str = "preview") -> dict[str, Any]:
+def fixture_plan(channel: str = "preview", base_version: str = "0.6.4") -> dict[str, Any]:
     return {
         "schema": "velnor.package-release-plan.v1",
         "channel": channel,
         "repository": "jackin-project/jackin",
         "default_branch": "main",
-        "base_version": "0.6.4",
+        "base_version": base_version,
         "products": [
             {"id": product_id, "package": package, "bins": bins, "targets": list(targets), "format": "tar-gz"}
             for product_id, package, bins, targets in PRODUCTS
         ],
         "companions": [{"id": "capsule-manifest", "path": "capsule-manifest.json", "asset_name": "capsule-manifest.json"}],
     }
+
+
+def fixture_stable_receipt(base: str = "0.6.4", source_sha: str = SOURCE_NEW) -> dict[str, Any]:
+    receipt = fixture_receipt(source_sha=source_sha, base=base)
+    receipt["channel"] = "stable"
+    receipt["source"]["event"] = "workflow_dispatch"
+    workflow_path = ".github/workflows/binary-release.yml"
+    receipt["workflow"].update(
+        {
+            "path": workflow_path,
+            "signer_job_id": "stable-signer",
+            "signer_workflow": workflow_path,
+        }
+    )
+    receipt["version"] = {"base": base, "value": base, "commit_count": None, "source_sha7": None}
+    receipt["tag"] = f"v{base}"
+    receipt["evidence"]["signer_workflow_ref"] = (
+        f"jackin-project/jackin/{workflow_path}@refs/heads/main"
+    )
+    return receipt
 
 
 def canonical(value: Any) -> bytes:
@@ -223,7 +244,7 @@ class PreviewUpdaterTest(unittest.TestCase):
         value = receipt or fixture_receipt()
         raw = canonical(value)
         self.receipt_path.write_bytes(raw)
-        plan_raw = canonical(fixture_plan(value["channel"]))
+        plan_raw = canonical(fixture_plan(value["channel"], value["version"]["base"]))
         self.plan_path.write_bytes(plan_raw)
         return {
             "VELNOR_TAP_BASE_SHA": "9" * 40,
@@ -319,6 +340,55 @@ class PreviewUpdaterTest(unittest.TestCase):
         retry = self.run_updater()
         self.assertEqual(0, retry.returncode, retry.stderr)
         self.assertEqual(first, self.formula.read_bytes())
+
+    def test_stable_updater_replaces_real_disabled_sentinel_and_preserves_formula_ruby(self) -> None:
+        self.formula = self.repo / updater.FORMULA_PATHS["stable"]
+        self.initial = STABLE_FORMULA.read_bytes()
+        self.formula.write_bytes(self.initial)
+        receipt = fixture_stable_receipt()
+        env = self.make_handoff(receipt=receipt)
+
+        result = self.run_updater(env)
+        self.assertEqual(0, result.returncode, result.stderr)
+        first = self.formula.read_bytes()
+        self.assertIn(f"# source-sha: {SOURCE_NEW}".encode(), first)
+        self.assertIn(b'  version "0.6.4"', first)
+        self.assertNotIn(b'  version "0.0.0"', first)
+        self.assertIn(b'if version.to_s == "0.0.0"', first)
+        self.assertIn(b'bin.install "jackin-usage-broker"', first)
+        self.assertEqual(6, len(re.findall(rb"releases/download/v0\.6\.4/", first)))
+        expected_hashes = {
+            asset["name"]: asset["sha256"] for asset in receipt["assets"] if asset["kind"] == "payload"
+        }
+        actual_urls = re.findall(rb'releases/download/v0\.6\.4/([^"]+)', first)
+        actual_hashes = re.findall(rb'^\s+sha256 "([0-9a-f]{64})"$', first, re.MULTILINE)
+        self.assertEqual(
+            expected_hashes,
+            {name.decode("ascii"): digest.decode("ascii") for name, digest in zip(actual_urls, actual_hashes, strict=True)},
+        )
+        base_lines = self.initial.splitlines(keepends=True)
+        actual_lines = first.splitlines(keepends=True)
+        self.assertEqual(len(base_lines), len(actual_lines))
+        metadata_prefixes = (
+            b"# source-sha: ", b"  version ", b"      url ", b"      sha256 ", b"    url ", b"    sha256 "
+        )
+        for old, new in zip(base_lines, actual_lines, strict=True):
+            if not old.startswith(metadata_prefixes):
+                self.assertEqual(old, new)
+
+        retry = self.run_updater(env)
+        self.assertEqual(0, retry.returncode, retry.stderr)
+        self.assertEqual(first, self.formula.read_bytes())
+
+        for candidate, reason in (
+            (fixture_stable_receipt(base="0.6.3"), "stable formula downgrade"),
+            (fixture_stable_receipt(source_sha=SOURCE_TAMPERED), "stable formula retry identity conflict"),
+        ):
+            with self.subTest(reason=reason):
+                rejected = self.run_updater(self.make_handoff(receipt=candidate))
+                self.assertNotEqual(0, rejected.returncode)
+                self.assertIn(reason, rejected.stderr)
+                self.assertEqual(first, self.formula.read_bytes())
 
     def assert_rejected_without_formula_write(
         self, env: dict[str, str] | None = None, reason: str | None = None

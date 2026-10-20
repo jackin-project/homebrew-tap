@@ -27,6 +27,7 @@ STABLE_VERSION_RE = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9
 VERSION_LINE_RE = re.compile(r'^ {2}version "([^"]+)"$')
 SOURCE_SHA_LINE_RE = re.compile(r"^# source-sha: ([0-9a-f]{40})$")
 URL_LINE_RE = re.compile(r'^\s+url "([^"]+)"$')
+SHA256_LINE_RE = re.compile(r'^\s+sha256 "([0-9a-f]{64})"$')
 URL_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_])url(?![A-Za-z0-9_])")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
 FORMULA_PATHS = {"preview": "Formula/jackin-preview.rb", "stable": "Formula/jackin.rb"}
@@ -51,19 +52,27 @@ def validate_formula_text(formula: str, channel: str = "preview") -> tuple[str, 
     source_shas = [match.group(1) for line in source_lines if (match := SOURCE_SHA_LINE_RE.fullmatch(line))]
     if len(source_lines) != 1 or len(source_shas) != 1 or (channel == "preview" and not source_shas[0].startswith(version.rsplit("+", 1)[1])):
         raise InvalidReleaseFormula("formula source commit does not match the selected release version")
+    if channel == "stable" and (version == "0.0.0" or source_shas[0] == "0" * 40):
+        raise InvalidReleaseFormula("stable formula does not identify a published release")
     tag = "preview" if channel == "preview" else f"v{version}"
     prefix = f"https://github.com/jackin-project/jackin/releases/download/{tag}/"
     expected = tuple(prefix + archive for archive in ARCHIVES)
     urls: list[str] = []
+    checksums: list[str] = []
     for line in formula.splitlines():
         match = URL_LINE_RE.fullmatch(line)
         if match is not None:
             urls.append(match.group(1))
         elif URL_TOKEN_RE.search(line) is not None:
             raise InvalidReleaseFormula("formula contains an unsupported or nonliteral URL declaration")
+        checksum = SHA256_LINE_RE.fullmatch(line)
+        if checksum is not None:
+            checksums.append(checksum.group(1))
     urls = tuple(urls)
     if Counter(urls) != Counter(expected):
         raise InvalidReleaseFormula("formula URLs must exactly match the six immutable release assets")
+    if len(checksums) != len(ARCHIVES) or any(checksum == "0" * 64 for checksum in checksums):
+        raise InvalidReleaseFormula("formula must contain six published nonzero SHA-256 checksums")
     return version, urls
 
 
