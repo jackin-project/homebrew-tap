@@ -43,8 +43,7 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
             lines.extend((f'      url "{url}"', f'      sha256 "{"b" * 64}"'))
         return "\n".join(lines)
 
-    def stable_formula(self) -> str:
-        version = "0.7.0"
+    def stable_formula(self, version: str = "0.7.0") -> str:
         prefix = f"https://github.com/jackin-project/jackin/releases/download/v{version}/"
         return self.formula(tuple(prefix + archive for archive in POLICY.ARCHIVES), version)
 
@@ -116,6 +115,29 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         self.assertEqual(6, len(urls))
         with self.assertRaises(POLICY.InvalidReleaseFormula):
             POLICY.validate_formula_text(formula, "preview")
+
+    def test_stable_version_grammar_rejects_unicode_digits_in_each_component(self) -> None:
+        version = "10.20.30"
+        valid = self.stable_formula(version)
+        self.assertIsNotNone(POLICY.STABLE_VERSION_RE.fullmatch(version))
+        POLICY.validate_formula_text(valid, "stable")
+        for index in (1, 4, 7):
+            with self.subTest(component=index):
+                unicode_version = version[:index] + "٠" + version[index + 1 :]
+                self.assertIsNone(POLICY.STABLE_VERSION_RE.fullmatch(unicode_version))
+                formula = self.stable_formula(unicode_version)
+                with self.assertRaisesRegex(POLICY.InvalidReleaseFormula, "selected release channel"):
+                    POLICY.validate_formula_text(formula, "stable")
+
+                result, _commands, log_exists = self.run_install_gate(
+                    self.formula(),
+                    "captured",
+                    channel="stable",
+                    stable_formula=formula,
+                )
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(b"selected release channel", result.stderr)
+                self.assertFalse(log_exists)
 
     def test_stable_formula_requires_published_release_identity_and_checksums(self) -> None:
         sentinel = self.stable_sentinel_formula()

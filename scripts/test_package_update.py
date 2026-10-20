@@ -24,6 +24,7 @@ UPDATER = ROOT / "scripts/package-update.py"
 FORMULA = ROOT / "Formula/jackin-preview.rb"
 STABLE_FORMULA = ROOT / "Formula/jackin.rb"
 SCRIPT = ROOT / "scripts/package-update.sh"
+VALIDATION = ROOT / "scripts/package_update_validation.py"
 SOURCE_OLD = "0123456" + "1" * 33
 SOURCE_NEW = "abcdef0" + "2" * 33
 SOURCE_TAMPERED = "fedcba9" + "3" * 33
@@ -236,6 +237,7 @@ class PreviewUpdaterTest(unittest.TestCase):
         (self.repo / "scripts").mkdir()
         shutil.copy2(SCRIPT, self.repo / "scripts/package-update.sh")
         shutil.copy2(UPDATER, self.repo / "scripts/package-update.py")
+        shutil.copy2(VALIDATION, self.repo / "scripts/package_update_validation.py")
         self.formula = self.repo / updater.FORMULA_PATHS["preview"]
         self.plan_path = self.root / "plan.json"
         self.old_version = "0.6.4-preview.41+0123456"

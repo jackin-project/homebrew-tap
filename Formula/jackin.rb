@@ -1,6 +1,7 @@
 # source-sha: 0000000000000000000000000000000000000000
+require_relative "../lib/jackin_formula_support"
+
 class Jackin < Formula
-  require_relative "../lib/jackin_formula_support"
   include JackinFormulaSupport.build
   desc "CLI for orchestrating autonomous AI coding agents"
   homepage "https://github.com/jackin-project/jackin"
