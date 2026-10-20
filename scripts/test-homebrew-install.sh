@@ -9,7 +9,7 @@ release_channel="${VELNOR_TAP_CHANNEL:-preview}"
 case "$release_channel" in
   preview)
     expected_check_id="homebrew-preview-install"
-    formula="jackin@preview"
+    formula="jackin-preview"
     ;;
   stable)
     expected_check_id="homebrew-stable-install"

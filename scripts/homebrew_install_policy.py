@@ -29,8 +29,6 @@ SOURCE_SHA_LINE_RE = re.compile(r"^# source-sha: ([0-9a-f]{40})$")
 URL_LINE_RE = re.compile(r'^\s+url "([^"]+)"$')
 URL_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_])url(?![A-Za-z0-9_])")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
-ALIAS_PATH = "Aliases/jackin@preview"
-ALIAS_TARGET = b"../Formula/jackin-preview.rb"
 FORMULA_PATHS = {"preview": "Formula/jackin-preview.rb", "stable": "Formula/jackin.rb"}
 
 
@@ -92,31 +90,24 @@ def _git(repository: Path, *arguments: str) -> bytes:
         raise InvalidReleaseFormula("could not verify the captured repository tree") from error
 
 
-def validate_runtime_alias(repository: Path, check_head: str) -> None:
-    """Bind the installed alias to its exact symlink blob at the captured source head."""
+def validate_runtime_formula(repository: Path, channel: str, check_head: str) -> None:
+    """Bind the directly installed channel formula to the captured source head."""
+    if channel not in FORMULA_PATHS:
+        raise InvalidReleaseFormula("release channel is unsupported")
     if COMMIT_RE.fullmatch(check_head) is None:
         raise InvalidReleaseFormula("the native check must provide a full source commit")
 
     root = repository.resolve(strict=True)
-    formula = root / "Formula/jackin-preview.rb"
-    _validate_alias_layout(root, formula)
-    _validate_checkout_head(root, check_head)
-    _validate_alias_blob(root, check_head)
-
-def _validate_alias_layout(root: Path, formula: Path) -> None:
+    formula = root / FORMULA_PATHS[channel]
     formula_parent = root / "Formula"
-    alias_parent = root / "Aliases"
-    alias_path = root / ALIAS_PATH
-
-    for parent in (formula_parent, alias_parent):
-        mode = parent.lstat().st_mode
-        if not stat.S_ISDIR(mode):
-            raise InvalidReleaseFormula("formula and alias parents must be real directories")
-    formula_mode = formula.lstat().st_mode
-    if not stat.S_ISREG(formula_mode) or formula.resolve(strict=True).parent != formula_parent:
+    if not stat.S_ISDIR(formula_parent.lstat().st_mode):
+        raise InvalidReleaseFormula("formula parent must be a real directory")
+    mode = formula.lstat().st_mode
+    if not stat.S_ISREG(mode) or formula.resolve(strict=True).parent != formula_parent:
         raise InvalidReleaseFormula("formula must be a regular file contained by the captured repository")
-    if not alias_path.is_symlink() or os.readlink(alias_path) != ALIAS_TARGET.decode("ascii"):
-        raise InvalidReleaseFormula("preview alias must be the exact relative formula symlink")
+    _validate_checkout_head(root, check_head)
+    _validate_captured_formula(root, formula, channel, check_head)
+    validate_formula(formula, channel)
 
 
 def _validate_checkout_head(root: Path, check_head: str) -> None:
@@ -129,24 +120,22 @@ def _validate_checkout_head(root: Path, check_head: str) -> None:
         raise InvalidReleaseFormula("the native check head is not the checkout commit or its PR merge second parent")
 
 
-def _validate_alias_blob(root: Path, check_head: str) -> None:
-    alias_path = root / ALIAS_PATH
-    tree_entry = _git(root, "ls-tree", "-z", "--full-tree", check_head, "--", ALIAS_PATH)
+def _validate_captured_formula(root: Path, formula: Path, channel: str, check_head: str) -> None:
+    relative_path = FORMULA_PATHS[channel]
+    tree_entry = _git(root, "ls-tree", "-z", "--full-tree", check_head, "--", relative_path)
     records = tree_entry.split(b"\0")
     if len(records) != 2 or not records[0]:
-        raise InvalidReleaseFormula("captured source tree must contain exactly one preview alias")
+        raise InvalidReleaseFormula("captured source tree must contain exactly one channel formula")
     metadata, separator, name = records[0].partition(b"\t")
     fields = metadata.split()
-    if separator != b"\t" or name != ALIAS_PATH.encode("ascii") or len(fields) != 3:
-        raise InvalidReleaseFormula("captured preview alias tree entry is malformed")
+    if separator != b"\t" or name != relative_path.encode("ascii") or len(fields) != 3:
+        raise InvalidReleaseFormula("captured formula tree entry is malformed")
     mode, object_type, object_id = fields
-    if mode != b"120000" or object_type != b"blob":
-        raise InvalidReleaseFormula("captured preview alias must be a symlink blob")
+    if mode not in (b"100644", b"100755") or object_type != b"blob":
+        raise InvalidReleaseFormula("captured channel formula must be a regular file blob")
     blob = _git(root, "cat-file", "blob", object_id.decode("ascii"))
-    if blob != ALIAS_TARGET:
-        raise InvalidReleaseFormula("captured preview alias has an unexpected symlink target")
-    if os.readlink(alias_path).encode("utf-8") != blob:
-        raise InvalidReleaseFormula("working preview alias differs from the captured source tree")
+    if formula.read_bytes() != blob:
+        raise InvalidReleaseFormula("working formula differs from the captured source tree")
 
 
 if __name__ == "__main__":
@@ -158,9 +147,7 @@ if __name__ == "__main__":
         if channel not in FORMULA_PATHS:
             raise InvalidReleaseFormula("release channel is unsupported")
         root = repository.resolve(strict=True)
-        validate_formula(root / FORMULA_PATHS[channel], channel)
-        if channel == "preview":
-            validate_runtime_alias(root, os.environ.get("VELNOR_CHECK_HEAD", ""))
+        validate_runtime_formula(root, channel, os.environ.get("VELNOR_CHECK_HEAD", ""))
     except (IndexError, OSError, UnicodeError, InvalidReleaseFormula) as error:
         print(f"Homebrew formula rejected: {error}", file=sys.stderr)
         raise SystemExit(2) from error

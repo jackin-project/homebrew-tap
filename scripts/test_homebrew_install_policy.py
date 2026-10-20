@@ -125,13 +125,12 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         with self.assertRaises(POLICY.InvalidReleaseFormula):
             POLICY.validate_formula_text(text)
 
-    def make_repository(self, alias_target: str = "../Formula/jackin-preview.rb") -> tuple[tempfile.TemporaryDirectory[str], Path, str]:
+    def make_repository(self) -> tuple[tempfile.TemporaryDirectory[str], Path, str]:
         temporary = tempfile.TemporaryDirectory()
         repository = Path(temporary.name)
         (repository / "Formula").mkdir()
-        (repository / "Aliases").mkdir()
         (repository / "Formula/jackin-preview.rb").write_text(self.formula(), encoding="utf-8")
-        os.symlink(alias_target, repository / "Aliases/jackin@preview")
+        (repository / "Formula/jackin.rb").write_text(self.stable_formula(), encoding="utf-8")
         self.git(repository, "init", "-q")
         self.git(repository, "config", "user.name", "Test")
         self.git(repository, "config", "user.email", "test@example.invalid")
@@ -149,33 +148,11 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
             stderr=subprocess.PIPE,
         ).stdout
 
-    def test_accepts_exact_alias_at_captured_full_head(self) -> None:
+    def test_accepts_direct_preview_and_stable_formulas_at_captured_full_head(self) -> None:
         temporary, repository, head = self.make_repository()
         with temporary:
-            POLICY.validate_runtime_alias(repository, head)
-
-    def test_rejects_malicious_alias_target_and_tree_blob(self) -> None:
-        temporary, repository, head = self.make_repository("../../outside.rb")
-        with temporary:
-            with self.assertRaises(POLICY.InvalidReleaseFormula):
-                POLICY.validate_runtime_alias(repository, head)
-
-    def test_rejects_working_alias_that_differs_from_captured_tree(self) -> None:
-        temporary, repository, head = self.make_repository()
-        with temporary:
-            alias_path = repository / "Aliases/jackin@preview"
-            alias_path.unlink()
-            os.symlink("../../outside.rb", alias_path)
-            with self.assertRaises(POLICY.InvalidReleaseFormula):
-                POLICY.validate_runtime_alias(repository, head)
-
-    def test_rejects_symlinked_alias_parent(self) -> None:
-        temporary, repository, head = self.make_repository()
-        with temporary:
-            (repository / "Aliases").rename(repository / "Aliases-real")
-            os.symlink("Aliases-real", repository / "Aliases")
-            with self.assertRaises(POLICY.InvalidReleaseFormula):
-                POLICY.validate_runtime_alias(repository, head)
+            POLICY.validate_runtime_formula(repository, "preview", head)
+            POLICY.validate_runtime_formula(repository, "stable", head)
 
     def test_rejects_formula_symlink(self) -> None:
         temporary, repository, _head = self.make_repository()
@@ -186,6 +163,14 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
             with self.assertRaises(POLICY.InvalidReleaseFormula):
                 POLICY.validate_formula(formula)
 
+    def test_rejects_formula_bytes_changed_after_captured_head(self) -> None:
+        temporary, repository, head = self.make_repository()
+        with temporary:
+            formula = repository / "Formula/jackin-preview.rb"
+            formula.write_text(self.formula().replace("/download/preview/", "/download/other/"), encoding="utf-8")
+            with self.assertRaisesRegex(POLICY.InvalidReleaseFormula, "differs from the captured source tree"):
+                POLICY.validate_runtime_formula(repository, "preview", head)
+
     def test_accepts_pull_request_merge_checkout_for_exact_second_parent(self) -> None:
         temporary, repository, source_head = self.make_repository()
         with temporary:
@@ -194,7 +179,7 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
             merge = self.git(repository, "commit-tree", tree, "-p", first_parent, "-p", source_head, "-m", "merge").decode().strip()
             self.git(repository, "update-ref", "refs/heads/main", merge)
             self.git(repository, "checkout", "-q", "--detach", merge)
-            POLICY.validate_runtime_alias(repository, source_head)
+            POLICY.validate_runtime_formula(repository, "preview", source_head)
 
     def run_install_gate(
         self,
@@ -276,8 +261,8 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
     def test_preview_channel_defaults_and_installs_only_the_rolling_formula(self) -> None:
         result, commands, _log_exists = self.run_install_gate(self.formula(), "captured")
         self.assertEqual(0, result.returncode, result.stderr.decode())
-        self.assertEqual("install --formula --force jackin@preview", commands[2])
-        self.assertEqual("test --formula jackin@preview", commands[3])
+        self.assertEqual("install --formula --force jackin-preview", commands[2])
+        self.assertEqual("test --formula jackin-preview", commands[3])
 
     def test_stable_channel_installs_only_the_stable_formula(self) -> None:
         result, commands, _log_exists = self.run_install_gate(self.stable_formula(), "captured", channel="stable")
@@ -306,8 +291,8 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         self.assertEqual(
             [
                 "trust --tap jackin-project/tap",
-                "install --formula --force jackin@preview",
-                "test --formula jackin@preview",
+                "install --formula --force jackin-preview",
+                "test --formula jackin-preview",
             ],
             commands[1:],
         )
