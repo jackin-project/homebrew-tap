@@ -31,15 +31,16 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         match = re.search(r'^  version "([^"]+)"$', source, re.MULTILINE)
         assert match is not None
         cls.version = match.group(1)
-        cls.prefix = f"https://github.com/jackin-project/jackin/releases/download/v{cls.version}/"
+        cls.prefix = "https://github.com/jackin-project/jackin/releases/download/preview/"
         cls.urls = tuple(cls.prefix + archive for archive in POLICY.ARCHIVES)
 
     def formula(self, urls: tuple[str, ...] | None = None, version: str | None = None) -> str:
         actual_version = self.version if version is None else version
         actual_urls = self.urls if urls is None else urls
-        return '\n'.join((f'  version "{actual_version}"', *(f'      url "{url}"' for url in actual_urls)))
+        source_sha = (actual_version.rsplit("+", 1)[1] + "1" * 33) if "+" in actual_version else "a" * 40
+        return '\n'.join((f'# source-sha: {source_sha}', f'  version "{actual_version}"', *(f'      url "{url}"' for url in actual_urls)))
 
-    def test_accepts_exact_immutable_six_asset_inventory(self) -> None:
+    def test_accepts_exact_rolling_preview_six_asset_inventory(self) -> None:
         version, urls = POLICY.validate_formula_text(self.formula())
         self.assertEqual(self.version, version)
         self.assertCountEqual(self.urls, urls)
@@ -52,14 +53,14 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
                 unicode_version = version[:index] + "٠" + version[index + 1 :]
                 self.assertIsNone(POLICY.VERSION_RE.fullmatch(unicode_version))
                 formula = self.formula(version=unicode_version)
-                with self.assertRaisesRegex(POLICY.InvalidPreviewFormula, "deterministic immutable preview version"):
+                with self.assertRaisesRegex(POLICY.InvalidReleaseFormula, "selected release channel"):
                     POLICY.validate_formula_text(formula)
 
     def test_url_tokens_keep_ascii_identifier_boundaries(self) -> None:
         for token in ("éurl", "urlé"):
             with self.subTest(token=token):
                 formula = self.formula() + f'\n    {token}("https://attacker.invalid/payload.tar.gz")\n'
-                with self.assertRaisesRegex(POLICY.InvalidPreviewFormula, "unsupported or nonliteral URL"):
+                with self.assertRaisesRegex(POLICY.InvalidReleaseFormula, "unsupported or nonliteral URL"):
                     POLICY.validate_formula_text(formula)
         self.assertIsNone(POLICY.URL_TOKEN_RE.search("my_url"))
         self.assertIsNone(POLICY.URL_TOKEN_RE.search("url_suffix"))
@@ -68,16 +69,16 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         hostile = "https://attacker.invalid/" + self.urls[0]
         urls = (hostile, *self.urls[1:])
         formula = self.formula(urls)
-        with self.assertRaises(POLICY.InvalidPreviewFormula):
+        with self.assertRaises(POLICY.InvalidReleaseFormula):
             POLICY.validate_formula_text(formula)
 
     def test_rejects_duplicate_payload_and_missing_payload(self) -> None:
         duplicated = (*self.urls[:5], self.urls[0])
         formula = self.formula(duplicated)
-        with self.assertRaises(POLICY.InvalidPreviewFormula):
+        with self.assertRaises(POLICY.InvalidReleaseFormula):
             POLICY.validate_formula_text(formula)
         formula = self.formula(self.urls[:5])
-        with self.assertRaises(POLICY.InvalidPreviewFormula):
+        with self.assertRaises(POLICY.InvalidReleaseFormula):
             POLICY.validate_formula_text(formula)
 
     def test_rejects_wrong_tag_even_when_asset_names_match(self) -> None:
@@ -85,23 +86,38 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         wrong_prefix = f"https://github.com/jackin-project/jackin/releases/download/v{wrong_version}/"
         wrong_urls = tuple(wrong_prefix + archive for archive in POLICY.ARCHIVES)
         formula = self.formula(wrong_urls)
-        with self.assertRaises(POLICY.InvalidPreviewFormula):
+        with self.assertRaises(POLICY.InvalidReleaseFormula):
             POLICY.validate_formula_text(formula)
 
-    def test_rejects_rolling_tag(self) -> None:
-        rolling = tuple(url.replace(f"/download/v{self.version}/", "/download/preview/") for url in self.urls)
+    def test_rejects_noncanonical_rolling_tag(self) -> None:
+        rolling = tuple(url.replace("/download/preview/", "/download/latest/") for url in self.urls)
         formula = self.formula(rolling)
-        with self.assertRaises(POLICY.InvalidPreviewFormula):
+        with self.assertRaises(POLICY.InvalidReleaseFormula):
             POLICY.validate_formula_text(formula)
+
+    def test_accepts_stable_semver_with_immutable_version_tag(self) -> None:
+        stable_version = "0.7.0"
+        prefix = f"https://github.com/jackin-project/jackin/releases/download/v{stable_version}/"
+        formula = self.formula(tuple(prefix + archive for archive in POLICY.ARCHIVES), stable_version)
+        actual, urls = POLICY.validate_formula_text(formula, "stable")
+        self.assertEqual(stable_version, actual)
+        self.assertEqual(6, len(urls))
+        with self.assertRaises(POLICY.InvalidReleaseFormula):
+            POLICY.validate_formula_text(formula, "preview")
+
+    def test_rejects_preview_source_comment_that_disagrees_with_version(self) -> None:
+        text = self.formula().replace("# source-sha: ", "# source-sha: f", 1)
+        with self.assertRaisesRegex(POLICY.InvalidReleaseFormula, "source commit"):
+            POLICY.validate_formula_text(text)
 
     def test_rejects_alternate_url_call_after_valid_inventory(self) -> None:
         text = self.formula() + '\n    url("https://attacker.invalid/payload.tar.gz")\n'
-        with self.assertRaises(POLICY.InvalidPreviewFormula):
+        with self.assertRaises(POLICY.InvalidReleaseFormula):
             POLICY.validate_formula_text(text)
 
     def test_rejects_dynamic_url_declaration(self) -> None:
         text = self.formula() + '\n    url "https://attacker.invalid/#{version}.tar.gz"\n'
-        with self.assertRaises(POLICY.InvalidPreviewFormula):
+        with self.assertRaises(POLICY.InvalidReleaseFormula):
             POLICY.validate_formula_text(text)
 
     def make_repository(self, alias_target: str = "../Formula/jackin-preview.rb") -> tuple[tempfile.TemporaryDirectory[str], Path, str]:
@@ -136,7 +152,7 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
     def test_rejects_malicious_alias_target_and_tree_blob(self) -> None:
         temporary, repository, head = self.make_repository("../../outside.rb")
         with temporary:
-            with self.assertRaises(POLICY.InvalidPreviewFormula):
+            with self.assertRaises(POLICY.InvalidReleaseFormula):
                 POLICY.validate_runtime_alias(repository, head)
 
     def test_rejects_working_alias_that_differs_from_captured_tree(self) -> None:
@@ -145,7 +161,7 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
             alias_path = repository / "Aliases/jackin@preview"
             alias_path.unlink()
             os.symlink("../../outside.rb", alias_path)
-            with self.assertRaises(POLICY.InvalidPreviewFormula):
+            with self.assertRaises(POLICY.InvalidReleaseFormula):
                 POLICY.validate_runtime_alias(repository, head)
 
     def test_rejects_symlinked_alias_parent(self) -> None:
@@ -153,7 +169,7 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         with temporary:
             (repository / "Aliases").rename(repository / "Aliases-real")
             os.symlink("Aliases-real", repository / "Aliases")
-            with self.assertRaises(POLICY.InvalidPreviewFormula):
+            with self.assertRaises(POLICY.InvalidReleaseFormula):
                 POLICY.validate_runtime_alias(repository, head)
 
     def test_rejects_formula_symlink(self) -> None:
@@ -162,7 +178,7 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
             formula = repository / "Formula/jackin-preview.rb"
             formula.unlink()
             formula.symlink_to(repository / "outside.rb")
-            with self.assertRaises(POLICY.InvalidPreviewFormula):
+            with self.assertRaises(POLICY.InvalidReleaseFormula):
                 POLICY.validate_formula(formula)
 
     def test_accepts_pull_request_merge_checkout_for_exact_second_parent(self) -> None:

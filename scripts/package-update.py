@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Alexey Zhokhov
 # SPDX-License-Identifier: Apache-2.0
-"""Rewrite only the preview formula's literal metadata from Velnor's handoff."""
+"""Rewrite only a channel formula's literal metadata from Velnor's handoff."""
 
 from __future__ import annotations
 
@@ -17,10 +17,7 @@ from typing import Any
 
 
 SOURCE_REPOSITORY = "jackin-project/jackin"
-SOURCE_REF = "refs/heads/main"
-WORKFLOW_PATH = ".github/workflows/binary-preview.yml"
-FORMULA_PATH = "Formula/jackin-preview.rb"
-PREVIEW_JOB = "preview-signer"
+FORMULA_PATHS = {"preview": "Formula/jackin-preview.rb", "stable": "Formula/jackin.rb"}
 CAPSULE_MANIFEST_NAME = "capsule-manifest.json"
 TARGETS = (
     "aarch64-apple-darwin",
@@ -39,6 +36,8 @@ PAYLOAD_NAMES = tuple(
 ENVIRONMENT = (
     "VELNOR_TAP_BASE_SHA",
     "VELNOR_TAP_FORMULA_PATH",
+    "VELNOR_TAP_RELEASE_PLAN",
+    "VELNOR_TAP_RELEASE_PLAN_SHA256",
     "VELNOR_TAP_RELEASE_RECEIPT",
     "VELNOR_TAP_RELEASE_RECEIPT_SHA256",
     "VELNOR_TAP_RELEASE_VERSION",
@@ -100,14 +99,42 @@ def canonical_receipt(raw: bytes) -> dict[str, Any]:
     return receipt
 
 
-def validate_receipt(receipt: dict[str, Any], env: dict[str, str]) -> dict[str, str]:
+def validate_plan(raw: bytes) -> dict[str, Any]:
+    plan = canonical_receipt(raw)
+    exact_keys(plan, {"schema", "channel", "repository", "default_branch", "base_version", "products", "companions"}, "release plan")
+    if plan["schema"] != "velnor.package-release-plan.v1" or plan["channel"] not in FORMULA_PATHS:
+        raise fail("unsupported release plan")
+    if plan["repository"] != SOURCE_REPOSITORY or not isinstance(plan["default_branch"], str):
+        raise fail("release plan source identity mismatch")
+    if not SEMVER.fullmatch(plan["base_version"]):
+        raise fail("release plan base version malformed")
+    if plan["channel"] == "preview" and plan["default_branch"] != "main":
+        raise fail("preview release plan must target main")
+    if not isinstance(plan["products"], list) or not isinstance(plan["companions"], list):
+        raise fail("release plan inventory malformed")
+    expected_products = []
+    for product_id, (package, bins, targets) in sorted(PRODUCTS.items()):
+        expected_products.append({"id": product_id, "package": package, "bins": list(bins), "targets": list(targets), "format": "tar-gz"})
+    if plan["products"] != expected_products:
+        raise fail("release plan product inventory mismatch")
+    if plan["companions"] != [{"id": "capsule-manifest", "path": "capsule-manifest.json", "asset_name": CAPSULE_MANIFEST_NAME}]:
+        raise fail("release plan companion inventory mismatch")
+    return plan
+
+
+def validate_receipt(receipt: dict[str, Any], env: dict[str, str], plan: dict[str, Any]) -> dict[str, str]:
     exact_keys(
         receipt,
         {"schema", "channel", "repository", "source", "workflow", "version", "tag", "products", "companions", "assets", "evidence"},
         "receipt",
     )
-    if receipt["schema"] != "velnor.package-release.v2" or receipt["channel"] != "preview":
+    channel = receipt["channel"]
+    if receipt["schema"] != "velnor.package-release.v2" or channel not in FORMULA_PATHS:
         raise fail("unsupported package release")
+    if env["VELNOR_TAP_FORMULA_PATH"] != FORMULA_PATHS[channel]:
+        raise fail("release channel formula destination mismatch")
+    if channel != plan["channel"]:
+        raise fail("release plan channel mismatch")
 
     repository = exact_keys(receipt["repository"], {"slug", "id"}, "repository")
     if (
@@ -123,11 +150,13 @@ def validate_receipt(receipt: dict[str, Any], env: dict[str, str]) -> dict[str, 
         "source",
     )
     source_sha = string(source["commit_sha"], "source commit")
+    expected_ref = f"refs/heads/{plan['default_branch']}"
+    expected_event = "workflow_run" if channel == "preview" else "workflow_dispatch"
     if (
         not HEX40.fullmatch(source_sha)
-        or source["ref"] != SOURCE_REF
-        or source["default_branch"] != "main"
-        or source["event"] != "workflow_run"
+        or source["ref"] != expected_ref
+        or source["default_branch"] != plan["default_branch"]
+        or source["event"] != expected_event
         or type(source["ci_run_id"]) is not int
         or not 0 < source["ci_run_id"] <= U64_MAX
         or type(source["ci_run_attempt"]) is not int
@@ -140,9 +169,11 @@ def validate_receipt(receipt: dict[str, Any], env: dict[str, str]) -> dict[str, 
         {"path", "ref", "authority_sha", "run_id", "run_attempt", "producer_run_id", "producer_run_attempt", "signer_job_id", "signer_workflow"},
         "workflow",
     )
+    workflow_path = ".github/workflows/binary-preview.yml" if channel == "preview" else ".github/workflows/binary-release.yml"
+    signer_job = "preview-signer" if channel == "preview" else "stable-signer"
     if (
-        workflow["path"] != WORKFLOW_PATH
-        or workflow["ref"] != SOURCE_REF
+        workflow["path"] != workflow_path
+        or workflow["ref"] != expected_ref
         or workflow["authority_sha"] != source_sha
         or workflow["run_id"] != workflow["producer_run_id"]
         or workflow["run_attempt"] != workflow["producer_run_attempt"]
@@ -150,29 +181,26 @@ def validate_receipt(receipt: dict[str, Any], env: dict[str, str]) -> dict[str, 
         or not 0 < workflow["run_id"] <= U64_MAX
         or type(workflow["run_attempt"]) is not int
         or not 0 < workflow["run_attempt"] <= U32_MAX
-        or workflow["signer_job_id"] != PREVIEW_JOB
-        or workflow["signer_workflow"] != WORKFLOW_PATH
+        or workflow["signer_job_id"] != signer_job
+        or workflow["signer_workflow"] != workflow_path
     ):
         raise fail("workflow identity mismatch")
 
     version_record = exact_keys(receipt["version"], {"base", "value", "commit_count", "source_sha7"}, "version")
     base = string(version_record["base"], "base version")
-    version = string(version_record["value"], "preview version")
+    version = string(version_record["value"], "release version")
     match = PREVIEW_VERSION.fullmatch(version)
     count = version_record["commit_count"]
     sha7 = version_record["source_sha7"]
-    if (
-        not SEMVER.fullmatch(base)
-        or not match
-        or match.group("base") != base
-        or not source_sha.startswith(match.group("sha"))
-        or match.group("sha") != sha7
-        or type(count) is not int
-        or not 0 < count <= U64_MAX
-        or int(match.group("count")) != count
-        or receipt["tag"] != f"v{version}"
-    ):
-        raise fail("deterministic preview identity mismatch")
+    if not SEMVER.fullmatch(base) or base != plan["base_version"]:
+        raise fail("release base version differs from plan")
+    if channel == "preview":
+        if (not match or match.group("base") != base or not source_sha.startswith(match.group("sha"))
+                or match.group("sha") != sha7 or type(count) is not int or not 0 < count <= U64_MAX
+                or int(match.group("count")) != count or receipt["tag"] != "preview"):
+            raise fail("deterministic preview identity mismatch")
+    elif version != base or count is not None or sha7 is not None or receipt["tag"] != f"v{base}":
+        raise fail("immutable stable release identity mismatch")
 
     if (
         env["VELNOR_TAP_RELEASE_VERSION"] != version
@@ -184,7 +212,7 @@ def validate_receipt(receipt: dict[str, Any], env: dict[str, str]) -> dict[str, 
     validate_products(receipt["products"], base)
     validate_companions(receipt["companions"])
     payload_digests = validate_assets(receipt["assets"])
-    validate_evidence(receipt["evidence"], payload_digests)
+    validate_evidence(receipt["evidence"], payload_digests, channel)
     return payload_digests
 
 
@@ -268,30 +296,35 @@ def validate_assets(assets: Any) -> dict[str, str]:
     return {name: by_name[name] for name in PAYLOAD_NAMES}
 
 
-def validate_evidence(evidence: Any, payload_digests: dict[str, str]) -> None:
+def validate_evidence(evidence: Any, payload_digests: dict[str, str], channel: str) -> None:
     evidence = exact_keys(
         evidence,
         {"profile", "sbom_format", "signer_issuer", "signer_workflow_ref", "attestation_predicate", "attested_subject_names"},
         "evidence",
     )
     expected_subjects = sorted([*payload_digests, CAPSULE_MANIFEST_NAME, "release.json"])
+    workflow_path = ".github/workflows/binary-preview.yml" if channel == "preview" else ".github/workflows/binary-release.yml"
     if (
         evidence["profile"] != "signed-sbom-v1"
         or evidence["sbom_format"] != "CycloneDX-JSON"
         or evidence["signer_issuer"] != "https://token.actions.githubusercontent.com"
         or evidence["signer_workflow_ref"]
-        != "jackin-project/jackin/.github/workflows/binary-preview.yml@refs/heads/main"
+        != f"jackin-project/jackin/{workflow_path}@refs/heads/main"
         or evidence["attestation_predicate"] != "https://slsa.dev/provenance/v1"
         or evidence["attested_subject_names"] != expected_subjects
     ):
         raise fail("release evidence identity mismatch")
 
 
-def parse_old_version(value: str, source: str) -> tuple[tuple[int, int, int], int]:
-    match = PREVIEW_VERSION.fullmatch(value)
-    if not match or not source.startswith(match.group("sha")):
-        raise fail("formula preview identity malformed")
-    return tuple(int(part) for part in match.group("base").split(".")), int(match.group("count"))
+def parse_old_version(value: str, source: str, channel: str) -> tuple[tuple[int, int, int], int]:
+    if channel == "preview":
+        match = PREVIEW_VERSION.fullmatch(value)
+        if not match or not source.startswith(match.group("sha")):
+            raise fail("formula preview identity malformed")
+        return tuple(int(part) for part in match.group("base").split(".")), int(match.group("count"))
+    if not SEMVER.fullmatch(value) or not HEX40.fullmatch(source):
+        raise fail("formula stable identity malformed")
+    return tuple(int(part) for part in value.split(".")), 0
 
 
 def parse_release_url(value: str) -> tuple[str, str]:
@@ -318,6 +351,7 @@ class FormulaRewrite:
         self.prior_version: str | None = None
         self.last_url: str | None = None
         self.seen: list[str] = []
+        self.channel = receipt["channel"]
 
     def rewrite_line(self, line: str) -> str:
         if line.startswith("# source-sha:"):
@@ -349,7 +383,7 @@ class FormulaRewrite:
         if not line.startswith(prefix) or not line.endswith(suffix):
             raise fail("unsupported version metadata syntax")
         old_version = line[len(prefix) : -len(suffix)]
-        parse_old_version(old_version, self.prior_source or "")
+        parse_old_version(old_version, self.prior_source or "", self.channel)
         self.slots["version"] += 1
         self.prior_version = old_version
         return f'  version "{self.receipt["version"]["value"]}"\n'
@@ -358,7 +392,8 @@ class FormulaRewrite:
         if not line.endswith('"\n'):
             raise fail("unsupported URL metadata syntax")
         old_tag, name = parse_release_url(line[len(prefix) : -2])
-        if self.prior_version is None or old_tag != f"v{self.prior_version}" or name not in self.payload_digests:
+        expected_old_tag = "preview" if self.channel == "preview" else f"v{self.prior_version}"
+        if self.prior_version is None or old_tag != expected_old_tag or name not in self.payload_digests:
             raise fail("formula base release binding mismatch")
         if name not in self.seen:
             self.seen.append(name)
@@ -386,19 +421,26 @@ class FormulaRewrite:
             raise fail("formula payload inventory mismatch")
         if self.prior_source is None or self.prior_version is None:
             raise fail("formula source or version missing")
-        validate_preview_transition(self.prior_source, self.prior_version, self.receipt)
+        validate_channel_transition(self.prior_source, self.prior_version, self.receipt, self.channel)
+
+    def is_exact_retry(self) -> bool:
+        if self.prior_source != self.receipt["source"]["commit_sha"] or self.prior_version is None:
+            return False
+        if self.channel == "stable":
+            return self.prior_version == self.receipt["version"]["value"]
+        prior_base, prior_count = parse_old_version(self.prior_version, self.prior_source, self.channel)
+        return prior_base == tuple(int(part) for part in self.receipt["version"]["base"].split(".")) and prior_count == self.receipt["version"]["commit_count"]
 
 
-def validate_preview_transition(prior_source: str, prior_version: str, receipt: dict[str, Any]) -> None:
-    old_base, old_count = parse_old_version(prior_version, prior_source)
-    new_base = tuple(int(part) for part in receipt["version"]["base"].split("."))
-    new_count = receipt["version"]["commit_count"]
-    if new_base < old_base or (new_base == old_base and new_count < old_count):
-        raise fail("preview formula downgrade")
-    if new_base == old_base and new_count == old_count:
+def validate_channel_transition(prior_source: str, prior_version: str, receipt: dict[str, Any], channel: str) -> None:
+    old_version, old_count = parse_old_version(prior_version, prior_source, channel)
+    new_version = tuple(int(part) for part in receipt["version"]["base"].split("."))
+    new_count = receipt["version"]["commit_count"] if channel == "preview" else 0
+    if new_version < old_version or (channel == "preview" and new_version == old_version and new_count < old_count):
+        raise fail(f"{channel} formula downgrade")
+    if new_version == old_version and (channel == "stable" or new_count == old_count):
         if prior_source != receipt["source"]["commit_sha"]:
-            raise fail("preview formula retry identity conflict")
-        # Retry is exact and cannot repair or alter unrelated formula bytes.
+            raise fail(f"{channel} formula retry identity conflict")
 
 
 def rewrite_formula(base: bytes, receipt: dict[str, Any], payload_digests: dict[str, str]) -> bytes:
@@ -411,17 +453,38 @@ def rewrite_formula(base: bytes, receipt: dict[str, Any], payload_digests: dict[
     rewrite = FormulaRewrite(receipt, payload_digests)
     output = [rewrite.rewrite_line(line) for line in text.splitlines(keepends=True)]
     rewrite.validate()
-    return "".join(output).encode("ascii")
+    result = "".join(output).encode("ascii")
+    if rewrite.is_exact_retry() and result != base:
+        raise fail("release retry changes published formula metadata")
+    return result
 
 
-def load_handoff(env: dict[str, str]) -> tuple[dict[str, Any], dict[str, str]]:
+def read_handoff_file(path_value: str, digest: str, label: str) -> bytes:
+    path = Path(path_value)
+    if not path.is_absolute():
+        raise fail(f"{label} path must be absolute")
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_RECEIPT_BYTES:
+            raise fail(f"{label} path is not a bounded regular file")
+        with os.fdopen(fd, "rb", closefd=False) as stream:
+            raw = stream.read(MAX_RECEIPT_BYTES + 1)
+    finally:
+        os.close(fd)
+    if hashlib.sha256(raw).hexdigest() != digest:
+        raise fail(f"{label} digest mismatch")
+    return raw
+
+
+def load_handoff(env: dict[str, str]) -> tuple[dict[str, Any], dict[str, Any], dict[str, str]]:
     unexpected = sorted(key for key in env if key.startswith("VELNOR_TAP_") and key not in ENVIRONMENT)
     if unexpected:
         raise fail(f"unexpected Velnor tap handoff field: {unexpected[0]}")
     missing = [key for key in ENVIRONMENT if not env.get(key)]
     if missing:
         raise fail(f"missing Velnor handoff field: {missing[0]}")
-    if env["VELNOR_TAP_FORMULA_PATH"] != FORMULA_PATH:
+    if env["VELNOR_TAP_FORMULA_PATH"] not in FORMULA_PATHS.values():
         raise fail("unexpected formula path")
     base_sha = env["VELNOR_TAP_BASE_SHA"]
     source_sha = env["VELNOR_TAP_SOURCE_SHA"]
@@ -429,23 +492,14 @@ def load_handoff(env: dict[str, str]) -> tuple[dict[str, Any], dict[str, str]]:
     if not HEX40.fullmatch(base_sha) or not HEX40.fullmatch(source_sha) or not HEX64.fullmatch(receipt_digest):
         raise fail("handoff digest or commit identity malformed")
 
-    receipt_path = Path(env["VELNOR_TAP_RELEASE_RECEIPT"])
-    if not receipt_path.is_absolute():
-        raise fail("receipt path must be absolute")
-    fd = os.open(receipt_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    try:
-        metadata = os.fstat(fd)
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_RECEIPT_BYTES:
-            raise fail("receipt path is not a bounded regular file")
-        with os.fdopen(fd, "rb", closefd=False) as stream:
-            raw = stream.read(MAX_RECEIPT_BYTES + 1)
-    finally:
-        os.close(fd)
-    if hashlib.sha256(raw).hexdigest() != receipt_digest:
-        raise fail("receipt digest mismatch")
-    receipt = canonical_receipt(raw)
-    payload_digests = validate_receipt(receipt, env)
-    return receipt, payload_digests
+    plan_raw = read_handoff_file(
+        env["VELNOR_TAP_RELEASE_PLAN"], env["VELNOR_TAP_RELEASE_PLAN_SHA256"], "release plan"
+    )
+    receipt_raw = read_handoff_file(env["VELNOR_TAP_RELEASE_RECEIPT"], receipt_digest, "receipt")
+    plan = validate_plan(plan_raw)
+    receipt = canonical_receipt(receipt_raw)
+    payload_digests = validate_receipt(receipt, env, plan)
+    return receipt, plan, payload_digests
 
 
 def atomic_write_formula(path: Path, content: bytes) -> None:
@@ -478,8 +532,8 @@ def atomic_write_formula(path: Path, content: bytes) -> None:
 
 def main() -> int:
     try:
-        receipt, payload_digests = load_handoff(dict(os.environ))
-        formula_path = Path(FORMULA_PATH)
+        receipt, _plan, payload_digests = load_handoff(dict(os.environ))
+        formula_path = Path(FORMULA_PATHS[receipt["channel"]])
         if not stat.S_ISDIR(formula_path.parent.lstat().st_mode):
             raise fail("formula parent is not a real directory")
         if not stat.S_ISREG(formula_path.lstat().st_mode):
@@ -488,7 +542,7 @@ def main() -> int:
         updated = rewrite_formula(base, receipt, payload_digests)
         atomic_write_formula(formula_path, updated)
     except (OSError, ValueError, RecursionError) as error:
-        print(f"preview formula update rejected: {error}", file=sys.stderr)
+        print(f"Homebrew formula update rejected: {error}", file=sys.stderr)
         return 1
     return 0
 

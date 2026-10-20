@@ -135,7 +135,7 @@ def fixture_receipt(
             "commit_count": count,
             "source_sha7": source_sha[:7],
         },
-        "tag": f"v{version}",
+        "tag": "preview",
         "products": products,
         "companions": [{"id": "capsule-manifest", "name": "capsule-manifest.json"}],
         "assets": assets,
@@ -147,6 +147,21 @@ def fixture_receipt(
             "attestation_predicate": "https://slsa.dev/provenance/v1",
             "attested_subject_names": sorted([name for _, _, name in payload_names] + ["capsule-manifest.json", "release.json"]),
         },
+    }
+
+
+def fixture_plan(channel: str = "preview") -> dict[str, Any]:
+    return {
+        "schema": "velnor.package-release-plan.v1",
+        "channel": channel,
+        "repository": "jackin-project/jackin",
+        "default_branch": "main",
+        "base_version": "0.6.4",
+        "products": [
+            {"id": product_id, "package": package, "bins": bins, "targets": list(targets), "format": "tar-gz"}
+            for product_id, package, bins, targets in PRODUCTS
+        ],
+        "companions": [{"id": "capsule-manifest", "path": "capsule-manifest.json", "asset_name": "capsule-manifest.json"}],
     }
 
 
@@ -187,9 +202,10 @@ class PreviewUpdaterTest(unittest.TestCase):
         (self.repo / "scripts").mkdir()
         shutil.copy2(SCRIPT, self.repo / "scripts/package-update.sh")
         shutil.copy2(UPDATER, self.repo / "scripts/package-update.py")
-        self.formula = self.repo / updater.FORMULA_PATH
+        self.formula = self.repo / updater.FORMULA_PATHS["preview"]
+        self.plan_path = self.root / "plan.json"
         self.old_version = "0.6.4-preview.41+0123456"
-        self.old_tag = f"v{self.old_version}"
+        self.old_tag = "preview"
         self.initial = formula_for(self.old_version, SOURCE_OLD, self.old_tag)
         self.formula.write_bytes(self.initial)
         self.receipt_path = self.root / "release.json"
@@ -207,9 +223,13 @@ class PreviewUpdaterTest(unittest.TestCase):
         value = receipt or fixture_receipt()
         raw = canonical(value)
         self.receipt_path.write_bytes(raw)
+        plan_raw = canonical(fixture_plan(value["channel"]))
+        self.plan_path.write_bytes(plan_raw)
         return {
             "VELNOR_TAP_BASE_SHA": "9" * 40,
-            "VELNOR_TAP_FORMULA_PATH": updater.FORMULA_PATH,
+            "VELNOR_TAP_FORMULA_PATH": updater.FORMULA_PATHS[value["channel"]],
+            "VELNOR_TAP_RELEASE_PLAN": str(self.plan_path),
+            "VELNOR_TAP_RELEASE_PLAN_SHA256": sha256(plan_raw),
             "VELNOR_TAP_RELEASE_RECEIPT": str(self.receipt_path),
             "VELNOR_TAP_RELEASE_RECEIPT_SHA256": digest_override or sha256(raw),
             "VELNOR_TAP_RELEASE_VERSION": version_override or value["version"]["value"],
@@ -271,9 +291,9 @@ class PreviewUpdaterTest(unittest.TestCase):
         self.assertNotEqual(self.initial, first)
         self.assertIn(f"# source-sha: {SOURCE_NEW}".encode(), first)
         self.assertIn(b'version "0.6.4-preview.42+abcdef0"', first)
-        self.assertIn(b"releases/download/v0.6.4-preview.42+abcdef0/", first)
+        self.assertIn(b"releases/download/preview/", first)
         self.assertIn(b'bin.install "jackin-usage-broker"', first)
-        actual_urls = re.findall(rb"releases/download/v[^/]+/([^\"]+)", first)
+        actual_urls = re.findall(rb"releases/download/preview/([^\"]+)", first)
         actual_hashes = re.findall(rb'^\s+sha256 "([0-9a-f]{64})"$', first, re.MULTILINE)
         expected_hashes = {
             asset["name"]: asset["sha256"]
@@ -328,6 +348,13 @@ class PreviewUpdaterTest(unittest.TestCase):
                 env.pop(key)
                 self.assert_rejected_without_formula_write(env)
 
+    def test_tampered_plan_digest_and_channel_destination_reject_without_write(self) -> None:
+        self.plan_path.write_bytes(self.plan_path.read_bytes() + b" ")
+        self.assert_rejected_without_formula_write()
+        env = self.env.copy()
+        env["VELNOR_TAP_FORMULA_PATH"] = updater.FORMULA_PATHS["stable"]
+        self.assert_rejected_without_formula_write(env)
+
     def test_tampered_receipt_inventory_is_rejected_even_with_recomputed_handoff_digest(self) -> None:
         for mutation in (
             "missing-payload",
@@ -355,6 +382,17 @@ class PreviewUpdaterTest(unittest.TestCase):
         conflict = fixture_receipt(count=41, source_sha=SOURCE_NEW)
         self.assert_rejected_without_formula_write(self.make_handoff(conflict))
 
+    def test_equal_preview_identity_cannot_replace_published_asset_digests(self) -> None:
+        first = self.run_updater()
+        self.assertEqual(0, first.returncode, first.stderr)
+        published = self.formula.read_bytes()
+        conflict = fixture_receipt()
+        next(asset for asset in conflict["assets"] if asset["kind"] == "payload")["sha256"] = "f" * 64
+        result = self.run_updater(self.make_handoff(conflict))
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("retry changes published formula metadata", result.stderr)
+        self.assertEqual(published, self.formula.read_bytes())
+
     def test_malicious_formula_metadata_is_rejected_without_write(self) -> None:
         malicious = self.initial.replace(
             b'      url "https://github.com/jackin-project/jackin/releases/download/'
@@ -369,11 +407,53 @@ class PreviewUpdaterTest(unittest.TestCase):
         self.initial = malicious
         self.assert_rejected_without_formula_write()
 
-    def test_rolling_preview_formula_is_rejected_until_bootstrapped_to_immutable_tag(self) -> None:
-        rolling = self.initial.replace(b"releases/download/" + self.old_tag.encode(), b"releases/download/preview")
+    def test_preview_formula_uses_only_the_canonical_rolling_tag(self) -> None:
+        rolling = self.initial.replace(b"releases/download/preview/", b"releases/download/other/")
         self.formula.write_bytes(rolling)
         self.initial = rolling
         self.assert_rejected_without_formula_write()
+
+    def test_stable_plan_updates_only_stable_formula_to_immutable_versioned_assets(self) -> None:
+        stable = fixture_receipt()
+        stable["channel"] = "stable"
+        stable["source"]["event"] = "workflow_dispatch"
+        stable["workflow"].update({
+            "path": ".github/workflows/binary-release.yml",
+            "signer_job_id": "stable-signer",
+            "signer_workflow": ".github/workflows/binary-release.yml",
+        })
+        stable["version"].update({"value": "0.6.4", "commit_count": None, "source_sha7": None})
+        stable["tag"] = "v0.6.4"
+        stable["evidence"]["signer_workflow_ref"] = "jackin-project/jackin/.github/workflows/binary-release.yml@refs/heads/main"
+        stable_plan = fixture_plan("stable")
+        plan_raw = canonical(stable_plan)
+        receipt_raw = canonical(stable)
+        stable_path = self.repo / updater.FORMULA_PATHS["stable"]
+        stable_path.write_bytes(formula_for("0.6.3", SOURCE_OLD, "v0.6.3"))
+        self.receipt_path.write_bytes(receipt_raw)
+        self.plan_path.write_bytes(plan_raw)
+        env = {
+            "VELNOR_TAP_BASE_SHA": "9" * 40,
+            "VELNOR_TAP_FORMULA_PATH": updater.FORMULA_PATHS["stable"],
+            "VELNOR_TAP_RELEASE_PLAN": str(self.plan_path),
+            "VELNOR_TAP_RELEASE_PLAN_SHA256": sha256(plan_raw),
+            "VELNOR_TAP_RELEASE_RECEIPT": str(self.receipt_path),
+            "VELNOR_TAP_RELEASE_RECEIPT_SHA256": sha256(receipt_raw),
+            "VELNOR_TAP_RELEASE_VERSION": "0.6.4",
+            "VELNOR_TAP_RELEASE_TAG": "v0.6.4",
+            "VELNOR_TAP_SOURCE_SHA": SOURCE_NEW,
+        }
+        result = self.run_updater(env)
+        self.assertEqual(0, result.returncode, result.stderr)
+        updated = stable_path.read_bytes()
+        self.assertIn(b'version "0.6.4"', updated)
+        self.assertIn(b"releases/download/v0.6.4/", updated)
+        self.assertEqual(self.initial, self.formula.read_bytes())
+
+        stable_path.write_bytes(formula_for("0.6.5", SOURCE_TAMPERED, "v0.6.5"))
+        rejected = self.run_updater(env)
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertIn(b'version "0.6.5"', stable_path.read_bytes())
 
     def test_wrapper_executes_python_updater(self) -> None:
         wrapper = self.repo / "scripts/package-update.sh"
@@ -407,15 +487,7 @@ class PreviewUpdaterTest(unittest.TestCase):
 
 
 class PackageUpdateDispatchTest(unittest.TestCase):
-    handoff_names = (
-        "VELNOR_TAP_BASE_SHA",
-        "VELNOR_TAP_FORMULA_PATH",
-        "VELNOR_TAP_RELEASE_RECEIPT",
-        "VELNOR_TAP_RELEASE_RECEIPT_SHA256",
-        "VELNOR_TAP_RELEASE_VERSION",
-        "VELNOR_TAP_RELEASE_TAG",
-        "VELNOR_TAP_SOURCE_SHA",
-    )
+    handoff_names = updater.ENVIRONMENT
 
     def run_dispatch(self, mode: str) -> tuple[subprocess.CompletedProcess[str], set[str]]:
         with tempfile.TemporaryDirectory(prefix="tap-dispatch-test-") as temporary:
