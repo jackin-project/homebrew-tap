@@ -430,6 +430,10 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
                 self.assertNotEqual(0, result.returncode)
                 self.assertFalse(log_exists)
 
+    def test_legacy_preview_formula_alias_is_absent(self) -> None:
+        alias = SCRIPT_DIR.parent / "Aliases/jackin@preview"
+        self.assertFalse(os.path.lexists(alias), "legacy preview formula alias must be removed")
+
 
 if __name__ == "__main__":
     unittest.main()
