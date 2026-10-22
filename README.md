@@ -30,10 +30,11 @@ brew upgrade jackin-preview
 brew upgrade jackin-dev
 ```
 
-`Formula/jackin-preview.rb` uses the single rolling `preview` release. Each
-formula revision binds its build version and source commit to SHA-256 digests
-for all six payloads. `Formula/jackin.rb` uses permanent `vX.Y.Z` stable release
-URLs. Stable tags and published stable releases must never be replaced.
+`Formula/jackin-preview.rb` uses an immutable `preview-<full source SHA>`
+release for each eligible main commit. Each formula revision binds its build
+version and complete source commit to SHA-256 digests for all six payloads.
+`Formula/jackin.rb` uses permanent `vX.Y.Z` stable release URLs. Published
+release tags and assets must never be replaced.
 
 The credential-free package updater consumes Velnor's checksum-bound release
 plan and authenticated `release.json` handoff. It selects the formula from the

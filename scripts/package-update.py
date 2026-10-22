@@ -108,7 +108,7 @@ class FormulaRewrite:
         if not line.endswith('"\n'):
             raise fail("unsupported URL metadata syntax")
         old_tag, name = parse_release_url(line[len(prefix) : -2])
-        expected_old_tag = "preview" if self.channel == "preview" else f"v{self.prior_version}"
+        expected_old_tag = f"preview-{self.prior_source}" if self.channel == "preview" else f"v{self.prior_version}"
         if self.prior_version is None or old_tag != expected_old_tag or name not in self.payload_digests:
             raise fail("formula base release binding mismatch")
         if name not in self.seen:

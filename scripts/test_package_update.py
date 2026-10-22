@@ -150,7 +150,7 @@ def fixture_receipt(
             "commit_count": count,
             "source_sha7": source_sha[:7],
         },
-        "tag": "preview",
+        "tag": f"preview-{source_sha}",
         "products": products,
         "companions": [{"id": "capsule-manifest", "name": "capsule-manifest.json"}],
         "assets": assets,
@@ -241,7 +241,7 @@ class PreviewUpdaterTest(unittest.TestCase):
         self.formula = self.repo / updater.FORMULA_PATHS["preview"]
         self.plan_path = self.root / "plan.json"
         self.old_version = "0.6.4-preview.41+0123456"
-        self.old_tag = "preview"
+        self.old_tag = f"preview-{SOURCE_OLD}"
         self.initial = formula_for(self.old_version, SOURCE_OLD, self.old_tag)
         self.formula.write_bytes(self.initial)
         self.receipt_path = self.root / "release.json"
@@ -327,9 +327,9 @@ class PreviewUpdaterTest(unittest.TestCase):
         self.assertNotEqual(self.initial, first)
         self.assertIn(f"# source-sha: {SOURCE_NEW}".encode(), first)
         self.assertIn(b'version "0.6.4-preview.42+abcdef0"', first)
-        self.assertIn(b"releases/download/preview/", first)
+        self.assertIn(f"releases/download/preview-{SOURCE_NEW}/".encode(), first)
         assert_shared_formula_install(self, first)
-        actual_urls = re.findall(rb"releases/download/preview/([^\"]+)", first)
+        actual_urls = re.findall(rb"releases/download/preview-[0-9a-f]{40}/([^\"]+)", first)
         actual_hashes = re.findall(rb'^\s+sha256 "([0-9a-f]{64})"$', first, re.MULTILINE)
         expected_hashes = {
             asset["name"]: asset["sha256"]
@@ -469,6 +469,12 @@ class PreviewUpdaterTest(unittest.TestCase):
                 receipt["source"]["event"] = event
                 self.assert_rejected_without_formula_write(self.make_handoff(receipt))
 
+    def test_preview_receipt_tag_binds_the_full_source_sha(self) -> None:
+        receipt = fixture_receipt()
+        receipt["tag"] = f"preview-{receipt['source']['commit_sha'][:7]}{'f' * 33}"
+        env = self.make_handoff(receipt)
+        self.assert_rejected_without_formula_write(env, "deterministic preview identity mismatch")
+
     def test_downgrade_and_conflicting_equal_version_retry_reject_without_write(self) -> None:
         downgrade = fixture_receipt(count=40, source_sha=SOURCE_TAMPERED)
         self.assert_rejected_without_formula_write(self.make_handoff(downgrade))
@@ -501,8 +507,11 @@ class PreviewUpdaterTest(unittest.TestCase):
         self.initial = malicious
         self.assert_rejected_without_formula_write()
 
-    def test_preview_formula_uses_only_the_canonical_rolling_tag(self) -> None:
-        rolling = self.initial.replace(b"releases/download/preview/", b"releases/download/other/")
+    def test_preview_formula_rejects_old_hardcoded_preview_tag(self) -> None:
+        rolling = self.initial.replace(
+            f"releases/download/{self.old_tag}/".encode(),
+            b"releases/download/preview/",
+        )
         self.formula.write_bytes(rolling)
         self.initial = rolling
         self.assert_rejected_without_formula_write()

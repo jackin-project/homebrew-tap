@@ -31,14 +31,22 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         match = re.search(r'^  version "([^"]+)"$', source, re.MULTILINE)
         assert match is not None
         cls.version = match.group(1)
-        cls.prefix = "https://github.com/jackin-project/jackin/releases/download/preview/"
+        cls.source_sha = cls.version.rsplit("+", 1)[1] + "1" * 33
+        cls.prefix = f"https://github.com/jackin-project/jackin/releases/download/preview-{cls.source_sha}/"
         cls.urls = tuple(cls.prefix + archive for archive in POLICY.ARCHIVES)
 
-    def formula(self, urls: tuple[str, ...] | None = None, version: str | None = None) -> str:
+    def formula(
+        self,
+        urls: tuple[str, ...] | None = None,
+        version: str | None = None,
+        source_sha: str | None = None,
+    ) -> str:
         actual_version = self.version if version is None else version
         actual_urls = self.urls if urls is None else urls
-        source_sha = (actual_version.rsplit("+", 1)[1] + "1" * 33) if "+" in actual_version else "a" * 40
-        lines = [f"# source-sha: {source_sha}", f'  version "{actual_version}"']
+        actual_source_sha = source_sha or (
+            actual_version.rsplit("+", 1)[1] + "1" * 33 if "+" in actual_version else "a" * 40
+        )
+        lines = [f"# source-sha: {actual_source_sha}", f'  version "{actual_version}"']
         for url in actual_urls:
             lines.extend((f'      url "{url}"', f'      sha256 "{"b" * 64}"'))
         return "\n".join(lines)
@@ -55,6 +63,17 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         version, urls = POLICY.validate_formula_text(self.formula())
         self.assertEqual(self.version, version)
         self.assertCountEqual(self.urls, urls)
+
+    def test_preview_tag_binds_all_40_source_sha_characters(self) -> None:
+        conflicting_source = self.source_sha[:7] + "f" * 33
+        formula = self.formula(source_sha=conflicting_source)
+        with self.assertRaisesRegex(POLICY.InvalidReleaseFormula, "URLs must exactly match"):
+            POLICY.validate_formula_text(formula)
+
+    def test_rejects_old_hardcoded_preview_tag(self) -> None:
+        rolling = tuple(url.replace(f"preview-{self.source_sha}", "preview") for url in self.urls)
+        with self.assertRaisesRegex(POLICY.InvalidReleaseFormula, "URLs must exactly match"):
+            POLICY.validate_formula_text(self.formula(rolling))
 
     def test_preview_version_rejects_unicode_decimal_digits(self) -> None:
         version = "10.20.30-preview.40+abcdef0"
@@ -100,8 +119,8 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         with self.assertRaises(POLICY.InvalidReleaseFormula):
             POLICY.validate_formula_text(formula)
 
-    def test_rejects_noncanonical_rolling_tag(self) -> None:
-        rolling = tuple(url.replace("/download/preview/", "/download/latest/") for url in self.urls)
+    def test_rejects_noncanonical_preview_tag(self) -> None:
+        rolling = tuple(url.replace(f"/download/preview-{self.source_sha}/", "/download/latest/") for url in self.urls)
         formula = self.formula(rolling)
         with self.assertRaises(POLICY.InvalidReleaseFormula):
             POLICY.validate_formula_text(formula)
@@ -113,6 +132,7 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         actual, urls = POLICY.validate_formula_text(formula, "stable")
         self.assertEqual(stable_version, actual)
         self.assertEqual(6, len(urls))
+        self.assertTrue(all(f"/download/v{stable_version}/" in url for url in urls))
         with self.assertRaises(POLICY.InvalidReleaseFormula):
             POLICY.validate_formula_text(formula, "preview")
 
@@ -249,7 +269,10 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         temporary, repository, head = self.make_repository()
         with temporary:
             formula = repository / "Formula/jackin-preview.rb"
-            formula.write_text(self.formula().replace("/download/preview/", "/download/other/"), encoding="utf-8")
+            formula.write_text(
+                self.formula().replace(f"/download/preview-{self.source_sha}/", "/download/other/"),
+                encoding="utf-8",
+            )
             with self.assertRaisesRegex(POLICY.InvalidReleaseFormula, "differs from the captured source tree"):
                 POLICY.validate_runtime_formula(repository, "preview", head)
 

@@ -45,7 +45,7 @@ def validate_formula_text(formula: str, channel: str = "preview") -> tuple[str, 
         raise InvalidReleaseFormula(UNSUPPORTED_CHANNEL)
     version = _validate_version(formula, channel)
     _validate_source_identity(formula, version, channel)
-    expected_urls = _expected_urls(version, channel)
+    expected_urls = _expected_urls(version, channel, _source_sha(formula))
     actual_urls = _validate_formula_asset_inventory(formula, expected_urls)
     return version, actual_urls
 
@@ -59,17 +59,24 @@ def _validate_version(formula: str, channel: str) -> str:
     return versions[0]
 
 
-def _validate_source_identity(formula: str, version: str, channel: str) -> None:
+def _source_sha(formula: str) -> str:
     source_lines = [line for line in formula.splitlines() if line.startswith("# source-sha")]
     source_shas = [match.group(1) for line in source_lines if (match := SOURCE_SHA_LINE_RE.fullmatch(line))]
-    if len(source_lines) != 1 or len(source_shas) != 1 or (channel == "preview" and not source_shas[0].startswith(version.rsplit("+", 1)[1])):
+    if len(source_lines) != 1 or len(source_shas) != 1:
         raise InvalidReleaseFormula("formula source commit does not match the selected release version")
-    if channel == "stable" and (version == "0.0.0" or source_shas[0] == "0" * 40):
+    return source_shas[0]
+
+
+def _validate_source_identity(formula: str, version: str, channel: str) -> None:
+    source_sha = _source_sha(formula)
+    if channel == "preview" and not source_sha.startswith(version.rsplit("+", 1)[1]):
+        raise InvalidReleaseFormula("formula source commit does not match the selected release version")
+    if channel == "stable" and (version == "0.0.0" or source_sha == "0" * 40):
         raise InvalidReleaseFormula("stable formula does not identify a published release")
 
 
-def _expected_urls(version: str, channel: str) -> tuple[str, ...]:
-    tag = "preview" if channel == "preview" else f"v{version}"
+def _expected_urls(version: str, channel: str, source_sha: str) -> tuple[str, ...]:
+    tag = f"preview-{source_sha}" if channel == "preview" else f"v{version}"
     prefix = f"https://github.com/jackin-project/jackin/releases/download/{tag}/"
 
     return tuple(prefix + archive for archive in ARCHIVES)

@@ -210,7 +210,7 @@ def validate_release_version(
     if channel == "preview":
         if (not match or match.group("base") != base or not source_sha.startswith(match.group("sha"))
                 or match.group("sha") != sha7 or type(count) is not int or not 0 < count <= U64_MAX
-                or int(match.group("count")) != count or receipt["tag"] != "preview"):
+                or int(match.group("count")) != count or receipt["tag"] != f"preview-{source_sha}"):
             raise fail("deterministic preview identity mismatch")
     elif version != base or count is not None or sha7 is not None or receipt["tag"] != f"v{base}":
         raise fail("immutable stable release identity mismatch")
