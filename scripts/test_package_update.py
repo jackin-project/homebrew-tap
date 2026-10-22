@@ -66,6 +66,7 @@ def assert_shared_formula_install(test: unittest.TestCase, formula: bytes) -> No
 
 def fixture_receipt(
     source_sha: str = SOURCE_NEW,
+    authority_sha: str | None = None,
     count: int = 42,
     base: str = "0.6.4",
     inventory_mutation: str | None = None,
@@ -136,7 +137,7 @@ def fixture_receipt(
         "workflow": {
             "path": ".github/workflows/binary-preview.yml",
             "ref": "refs/heads/main",
-            "authority_sha": source_sha,
+            "authority_sha": authority_sha or source_sha,
             "run_id": 99002,
             "run_attempt": 1,
             "producer_run_id": 99002,
@@ -474,6 +475,34 @@ class PreviewUpdaterTest(unittest.TestCase):
         receipt["tag"] = f"preview-{receipt['source']['commit_sha'][:7]}{'f' * 33}"
         env = self.make_handoff(receipt)
         self.assert_rejected_without_formula_write(env, "deterministic preview identity mismatch")
+
+    def test_preview_binds_source_and_workflow_authority_independently(self) -> None:
+        authority_sha = "fedcba9876543210fedcba9876543210fedcba98"
+        receipt = fixture_receipt(source_sha=SOURCE_NEW, authority_sha=authority_sha)
+        result = self.run_updater(self.make_handoff(receipt))
+        self.assertEqual(0, result.returncode, result.stderr)
+        updated = self.formula.read_bytes()
+        self.assertIn(f"# source-sha: {SOURCE_NEW}".encode(), updated)
+        self.assertIn(f"releases/download/preview-{SOURCE_NEW}/".encode(), updated)
+        self.initial = updated
+
+        for invalid_authority in (
+            authority_sha.upper(),
+            authority_sha[:-1],
+            "g" + authority_sha[1:],
+            42,
+        ):
+            with self.subTest(authority_sha=invalid_authority):
+                malformed = fixture_receipt(source_sha=SOURCE_NEW)
+                malformed["workflow"]["authority_sha"] = invalid_authority
+                env = self.make_handoff(malformed)
+                self.assert_rejected_without_formula_write(env, "workflow identity mismatch")
+
+    def test_stable_workflow_authority_must_equal_source_sha(self) -> None:
+        receipt = fixture_stable_receipt()
+        receipt["workflow"]["authority_sha"] = SOURCE_OLD
+        env = self.make_handoff(receipt)
+        self.assert_rejected_without_formula_write(env, "workflow identity mismatch")
 
     def test_downgrade_and_conflicting_equal_version_retry_reject_without_write(self) -> None:
         downgrade = fixture_receipt(count=40, source_sha=SOURCE_TAMPERED)

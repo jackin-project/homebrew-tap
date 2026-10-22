@@ -180,10 +180,13 @@ def validate_workflow_identity(receipt: dict[str, Any], source_sha: str, plan: d
     )
     workflow_path = ".github/workflows/binary-preview.yml" if channel == "preview" else ".github/workflows/binary-release.yml"
     signer_job = "preview-signer" if channel == "preview" else "stable-signer"
+    authority_sha = workflow["authority_sha"]
     if (
         workflow["path"] != workflow_path
         or workflow["ref"] != expected_ref
-        or workflow["authority_sha"] != source_sha
+        or not isinstance(authority_sha, str)
+        or not HEX40.fullmatch(authority_sha)
+        or (channel == "stable" and authority_sha != source_sha)
         or workflow["run_id"] != workflow["producer_run_id"]
         or workflow["run_attempt"] != workflow["producer_run_attempt"]
         or type(workflow["run_id"]) is not int
