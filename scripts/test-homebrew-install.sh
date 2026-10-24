@@ -53,4 +53,4 @@ export HOMEBREW_NO_ENV_HINTS=1
 "$BREW" tap jackin-project/tap "$root"
 "$BREW" trust --tap jackin-project/tap
 "$BREW" install --formula --force "$formula"
-"$BREW" test --formula "$formula"
+"$BREW" test "$formula"

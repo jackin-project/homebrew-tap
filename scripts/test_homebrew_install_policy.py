@@ -384,14 +384,14 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr.decode())
         self.assertRegex(commands[0], r"^ruby .*/scripts/test_homebrew_formulary_keg\.rb .+$")
         self.assertEqual("install --formula --force jackin-preview", commands[3])
-        self.assertEqual("test --formula jackin-preview", commands[4])
+        self.assertEqual("test jackin-preview", commands[4])
 
     def test_stable_channel_installs_only_the_stable_formula(self) -> None:
         result, commands, _log_exists = self.run_install_gate(self.stable_formula(), "captured", channel="stable")
         self.assertEqual(0, result.returncode, result.stderr.decode())
         self.assertRegex(commands[0], r"^ruby .*/scripts/test_homebrew_formulary_keg\.rb .+$")
         self.assertEqual("install --formula --force jackin", commands[3])
-        self.assertEqual("test --formula jackin", commands[4])
+        self.assertEqual("test jackin", commands[4])
 
     def test_unreleased_stable_sentinel_is_rejected_before_any_brew_command(self) -> None:
         result, _commands, log_exists = self.run_install_gate(
@@ -423,7 +423,7 @@ class HomebrewInstallPolicyTests(unittest.TestCase):
             [
                 "trust --tap jackin-project/tap",
                 "install --formula --force jackin-preview",
-                "test --formula jackin-preview",
+                "test jackin-preview",
             ],
             commands[2:],
         )
