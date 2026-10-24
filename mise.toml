@@ -3,26 +3,26 @@
 #
 # Gate contract: generated CI runs `mise run check` once (velnor generic
 # homebrew unit). Every named gate reaches a disjoint leaf set so each leaf
-# runs once per `mise run check`. build = formula Ruby syntax. test = package
-# updater fixture test. lint = actionlint + shellcheck. No fmt gate: no
-# formatter is pinned. package-update is the updater workflow task, not a CI
-# gate.
+# runs once per `mise run check`. build = formula Ruby syntax. test = native
+# preview updater acceptance tests. Homebrew installation runs as a separate
+# typed native check on macOS ARM64. lint = jactionlint + shellcheck. No fmt
+# gate: no formatter is pinned. package-update is the credential-free task
+# invoked from Velnor's captured tap-main checkout.
 
 [settings]
 lockfile = true
 
 [tools]
-actionlint = "1.7.12"
-gh = "2.102.0"
-jq = "1.8.2"
-python = "3.14"
+jactionlint = "2.3.0"
+gh = "2.102.1"
+python = "3.15.0"
 shellcheck = "0.11.0"
-uv = "0.11.29"
+uv = "0.13.1"
 zizmor = "1.31.1"
 "pipx:reuse" = { version = "6.2.0", extras = "charset-normalizer", depends = ["python"] }
 
-[tasks.actionlint]
-run = "actionlint"
+[tasks.jactionlint]
+run = "bash -c 'set -euo pipefail; [ ! -L .github ] && [ -d .github ] && [ -r .github ] || { echo \"jactionlint: .github must be a readable, non-symlink directory\" >&2; exit 3; }; [ ! -L .github/workflows ] && [ -d .github/workflows ] && [ -r .github/workflows ] || { echo \"jactionlint: .github/workflows must be a readable, non-symlink directory\" >&2; exit 3; }; if [ -e .github/actions ] || [ -L .github/actions ]; then [ ! -L .github/actions ] && [ -d .github/actions ] && [ -r .github/actions ] || { echo \"jactionlint: .github/actions must be a readable, non-symlink directory when present\" >&2; exit 3; }; fi; [ ! -L .github/jactionlint.yaml ] && [ -f .github/jactionlint.yaml ] && [ -r .github/jactionlint.yaml ] || { echo \"jactionlint: .github/jactionlint.yaml must be a readable, non-symlink regular file\" >&2; exit 3; }; symlinks=\"$({ find .github/workflows -type l -print && { if [ -d .github/actions ]; then find .github/actions -type l -print; fi; } && find .github -maxdepth 1 -type l -name \"dependabot.y*ml\" -print; } | LC_ALL=C sort)\"; [ -z \"$symlinks\" ] || { echo \"jactionlint: workflow/action/Dependabot inputs cannot be symlinks\" >&2; exit 3; }; files_text=\"$({ find .github/workflows -maxdepth 1 -type f -name \"*.y*ml\" && { if [ -d .github/actions ]; then find .github/actions -type f -name \"action.y*ml\"; fi; } && find .github -maxdepth 1 -type f -name \"dependabot.y*ml\"; } | LC_ALL=C sort)\"; [ -n \"$files_text\" ] || { echo \"jactionlint: no workflow files matched\" >&2; exit 3; }; files=(); while IFS= read -r file; do files+=(\"$file\"); done <<< \"$files_text\"; exec jactionlint --config-file .github/jactionlint.yaml --format oneline --strict-exit --no-online --shellcheck=shellcheck --pyflakes= --no-color \"${files[@]}\"'"
 
 [tasks.shellcheck]
 run = "shellcheck scripts/*.sh"
@@ -33,9 +33,12 @@ run = "./scripts/package-update.sh"
 [tasks.package-update-test]
 run = "./scripts/test-package-update.sh"
 
+[tasks.homebrew-preview-install-test]
+run = "./scripts/test-homebrew-install.sh"
+
 [tasks.build]
 # POSIX /bin/sh (CI dash): no pipefail. Avoid `${#...}`: mise Tera treats `{#` as a comment.
-run = "set -e; for f in Formula/*.rb; do ruby -c \"$f\"; done; if [ -d Casks ]; then for f in Casks/*.rb; do [ -e \"$f\" ] || continue; ruby -c \"$f\"; done; fi"
+run = "set -e; for f in Formula/*.rb lib/*.rb; do [ -e \"$f\" ] || continue; ruby -c \"$f\"; done; if [ -d Casks ]; then for f in Casks/*.rb; do [ -e \"$f\" ] || continue; ruby -c \"$f\"; done; fi"
 
 [tasks.reuse-lint]
 run = "reuse lint"
@@ -44,7 +47,7 @@ run = "reuse lint"
 depends = ["package-update-test"]
 
 [tasks.lint]
-depends = ["actionlint", "shellcheck"]
+depends = ["jactionlint", "shellcheck"]
 
 [tasks.check]
-depends = ["actionlint", "shellcheck", "package-update-test", "build", "reuse-lint"]
+depends = ["jactionlint", "shellcheck", "package-update-test", "build", "reuse-lint"]

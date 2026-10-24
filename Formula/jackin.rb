@@ -1,25 +1,50 @@
-# SPDX-FileCopyrightText: 2026 Alexey Zhokhov
-# SPDX-License-Identifier: Apache-2.0
+# source-sha: 0000000000000000000000000000000000000000
+require_relative "../lib/jackin_formula_support"
 
 class Jackin < Formula
-  desc "CLI for orchestrating AI coding agents in Docker containers at scale"
+  include JackinFormulaSupport.build
+  desc "CLI for orchestrating autonomous AI coding agents"
   homepage "https://github.com/jackin-project/jackin"
+  version "0.0.0"
   license "Apache-2.0"
-  head "https://github.com/jackin-project/jackin.git", branch: "main"
 
-  disable! date: "2026-05-09", because: "jackin has not reached a stable release yet; use the rolling preview channel"
+  disable! date: "2026-10-20", because: "has no native stable release yet" if version.to_s == "0.0.0"
 
-  depends_on "rust" => :build
-  depends_on "docker" => :optional
+  on_macos do
+    on_arm do
+      url "https://github.com/jackin-project/jackin/releases/download/v0.0.0/jackin-aarch64-apple-darwin.tar.gz"
+      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+    end
+    on_intel do
+      url "https://github.com/jackin-project/jackin/releases/download/v0.0.0/jackin-x86_64-apple-darwin.tar.gz"
+      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+    end
+  end
 
-  conflicts_with "jackin-project/tap/jackin-preview", because: "stable and preview install the same binary"
+  on_linux do
+    on_arm do
+      url "https://github.com/jackin-project/jackin/releases/download/v0.0.0/jackin-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+    end
+    on_intel do
+      url "https://github.com/jackin-project/jackin/releases/download/v0.0.0/jackin-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+    end
+  end
 
-  def install
-    ENV["JACKIN_VERSION_OVERRIDE"] = version.to_s
-    system "cargo", "install", *std_cargo_args
+  conflicts_with "jackin-project/tap/jackin-preview", because: "preview and stable install the same binary"
+
+  resource "jackin-capsule-aarch64-unknown-linux-gnu" do
+    url "https://github.com/jackin-project/jackin/releases/download/v0.0.0/jackin-capsule-aarch64-unknown-linux-gnu.tar.gz"
+    sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  end
+
+  resource "jackin-capsule-x86_64-unknown-linux-gnu" do
+    url "https://github.com/jackin-project/jackin/releases/download/v0.0.0/jackin-capsule-x86_64-unknown-linux-gnu.tar.gz"
+    sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   end
 
   test do
-    assert_match version.to_s, shell_output("#{bin}/jackin --version")
+    jackin_package_test
   end
 end

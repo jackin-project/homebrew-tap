@@ -1,0 +1,715 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Alexey Zhokhov
+# SPDX-License-Identifier: Apache-2.0
+"""Acceptance tests for the credential-free, formula-only preview updater."""
+
+from __future__ import annotations
+
+import ast
+import hashlib
+import importlib.util
+import json
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parents[1]
+UPDATER = ROOT / "scripts/package-update.py"
+FORMULA = ROOT / "Formula/jackin-preview.rb"
+STABLE_FORMULA = ROOT / "Formula/jackin.rb"
+SCRIPT = ROOT / "scripts/package-update.sh"
+VALIDATION = ROOT / "scripts/package_update_validation.py"
+SOURCE_OLD = "0123456" + "1" * 33
+SOURCE_NEW = "abcdef0" + "2" * 33
+SOURCE_TAMPERED = "fedcba9" + "3" * 33
+TARGETS = (
+    "aarch64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+)
+CAPSULE_TARGETS = ("aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu")
+PRODUCTS = (
+    ("jackin", "jackin", ["jackin", "jackin-role", "jackin-usage-broker"], TARGETS),
+    ("jackin-capsule", "jackin-capsule", ["jackin-capsule"], CAPSULE_TARGETS),
+)
+
+spec = importlib.util.spec_from_file_location("package_update", UPDATER)
+if spec is None or spec.loader is None:
+    raise RuntimeError("could not load updater module")
+updater = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(updater)
+
+
+def sha256(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def assert_shared_formula_install(test: unittest.TestCase, formula: bytes) -> None:
+    test.assertIn(b'require_relative "../lib/jackin_formula_support"', formula)
+    test.assertIn(b"JackinFormulaSupport.build", formula)
+    test.assertIn(b"jackin_package_test", formula)
+    test.assertNotIn(b'bin.install "jackin-usage-broker"', formula)
+    support = (ROOT / "lib/jackin_formula_support.rb").read_bytes()
+    for executable in ("jackin", "jackin-role", "jackin-usage-broker"):
+        test.assertIn(f'bin.install "{executable}"'.encode(), support)
+    test.assertIn(b"File.realpath(__FILE__)", support)
+    test.assertIn(b"lib.mkpath", support)
+    test.assertIn(b'FileUtils.cp(helper_source, lib/"jackin_formula_support.rb")', support)
+
+
+def fixture_receipt(
+    source_sha: str = SOURCE_NEW,
+    authority_sha: str | None = None,
+    count: int = 42,
+    base: str = "0.6.4",
+    inventory_mutation: str | None = None,
+) -> dict[str, Any]:
+    version = f"{base}-preview.{count}+{source_sha[:7]}"
+    products: list[dict[str, Any]] = []
+    payload_names: list[tuple[str, str, str]] = []
+    for product_id, package, bins, targets in PRODUCTS:
+        payloads = []
+        for target in targets:
+            name = f"{product_id}-{target}.tar.gz"
+            payload_names.append((product_id, target, name))
+            payloads.append({"format": "tar-gz", "target": target, "name": name, "members": bins})
+        products.append(
+            {"id": product_id, "package": package, "package_version": base, "bins": bins, "payloads": payloads}
+        )
+
+    records: dict[str, tuple[str, str | None, str | None, str | None]] = {}
+    for product_id, target, name in payload_names:
+        binding = (product_id, target, name)
+        records[name] = ("payload", *binding)
+        records[f"{name}.sha256"] = ("sha256", *binding)
+        records[f"{name}.bundle"] = ("signature_bundle", *binding)
+        records[f"{name}.sbom.json"] = ("sbom", *binding)
+    records["SHA256SUMS"] = ("checksum_list", None, None, None)
+    records["capsule-manifest.json"] = ("companion", None, None, "capsule-manifest.json")
+    records["capsule-manifest.json.bundle"] = (
+        "companion_signature_bundle",
+        None,
+        None,
+        "capsule-manifest.json",
+    )
+    assets = [
+        {
+            "name": name,
+            "kind": kind,
+            "product_id": product_id,
+            "target": target,
+            "subject_name": subject,
+            "size": index + 1,
+            "sha256": sha256(f"asset:{name}".encode()),
+        }
+        for index, (name, (kind, product_id, target, subject)) in enumerate(sorted(records.items()))
+    ]
+    if inventory_mutation == "missing-payload":
+        assets = [asset for asset in assets if asset["name"] != payload_names[0][2]]
+    elif inventory_mutation == "wrong-target":
+        next(asset for asset in assets if asset["kind"] == "payload")["target"] = "x86_64-unknown-linux-gnu"
+    elif inventory_mutation == "duplicate-name":
+        assets[-1]["name"] = assets[-2]["name"]
+    elif inventory_mutation == "wrong-name-type":
+        assets[0]["name"] = ["jackin"]
+    elif inventory_mutation == "product-order":
+        products.reverse()
+
+    return {
+        "schema": "velnor.package-release.v2",
+        "channel": "preview",
+        "repository": {"slug": "jackin-project/jackin", "id": 123456},
+        "source": {
+            "commit_sha": source_sha,
+            "ref": "refs/heads/main",
+            "default_branch": "main",
+            "event": "workflow_run",
+            "ci_run_id": 99001,
+            "ci_run_attempt": 1,
+        },
+        "workflow": {
+            "path": ".github/workflows/binary-preview.yml",
+            "ref": "refs/heads/main",
+            "authority_sha": authority_sha or source_sha,
+            "run_id": 99002,
+            "run_attempt": 1,
+            "producer_run_id": 99002,
+            "producer_run_attempt": 1,
+            "signer_job_id": "preview-signer",
+            "signer_workflow": ".github/workflows/binary-preview.yml",
+        },
+        "version": {
+            "base": base,
+            "value": version,
+            "commit_count": count,
+            "source_sha7": source_sha[:7],
+        },
+        "tag": f"preview-{source_sha}",
+        "products": products,
+        "companions": [{"id": "capsule-manifest", "name": "capsule-manifest.json"}],
+        "assets": assets,
+        "evidence": {
+            "profile": "signed-sbom-v1",
+            "sbom_format": "CycloneDX-JSON",
+            "signer_issuer": "https://token.actions.githubusercontent.com",
+            "signer_workflow_ref": "jackin-project/jackin/.github/workflows/binary-preview.yml@refs/heads/main",
+            "attestation_predicate": "https://slsa.dev/provenance/v1",
+            "attested_subject_names": sorted([name for _, _, name in payload_names] + ["capsule-manifest.json", "release.json"]),
+        },
+    }
+
+
+def fixture_plan(channel: str = "preview", base_version: str = "0.6.4") -> dict[str, Any]:
+    return {
+        "schema": "velnor.package-release-plan.v1",
+        "channel": channel,
+        "repository": "jackin-project/jackin",
+        "default_branch": "main",
+        "base_version": base_version,
+        "products": [
+            {"id": product_id, "package": package, "bins": bins, "targets": list(targets), "format": "tar-gz"}
+            for product_id, package, bins, targets in PRODUCTS
+        ],
+        "companions": [{"id": "capsule-manifest", "path": "capsule-manifest.json", "asset_name": "capsule-manifest.json"}],
+    }
+
+
+def fixture_stable_receipt(base: str = "0.6.4", source_sha: str = SOURCE_NEW) -> dict[str, Any]:
+    receipt = fixture_receipt(source_sha=source_sha, base=base)
+    receipt["channel"] = "stable"
+    receipt["source"]["event"] = "workflow_dispatch"
+    workflow_path = ".github/workflows/binary-release.yml"
+    receipt["workflow"].update(
+        {
+            "path": workflow_path,
+            "signer_job_id": "stable-signer",
+            "signer_workflow": workflow_path,
+        }
+    )
+    receipt["version"] = {"base": base, "value": base, "commit_count": None, "source_sha7": None}
+    receipt["tag"] = f"v{base}"
+    receipt["evidence"]["signer_workflow_ref"] = (
+        f"jackin-project/jackin/{workflow_path}@refs/heads/main"
+    )
+    return receipt
+
+
+def canonical(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("ascii")
+
+
+def formula_for(version: str, source_sha: str, tag: str) -> bytes:
+    text = FORMULA.read_text(encoding="ascii")
+    text, source_count = re.subn(
+        r"(?m)^# source-sha: [0-9a-f]{40}$",
+        f"# source-sha: {source_sha}",
+        text,
+    )
+    text, version_count = re.subn(
+        r'(?m)^  version "[^"\n]+"$',
+        f'  version "{version}"',
+        text,
+    )
+    text, tag_count = re.subn(
+        r"(releases/download/)[^/\"\n]+/",
+        rf"\g<1>{tag}/",
+        text,
+    )
+    if source_count != 1 or version_count != 1 or tag_count != 6:
+        raise AssertionError("preview formula fixture metadata inventory changed")
+    return text.encode("ascii")
+
+
+class PreviewUpdaterTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="tap-updater-test-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        (self.repo / "Formula").mkdir()
+        (self.repo / "scripts").mkdir()
+        shutil.copy2(SCRIPT, self.repo / "scripts/package-update.sh")
+        shutil.copy2(UPDATER, self.repo / "scripts/package-update.py")
+        shutil.copy2(VALIDATION, self.repo / "scripts/package_update_validation.py")
+        self.formula = self.repo / updater.FORMULA_PATHS["preview"]
+        self.plan_path = self.root / "plan.json"
+        self.old_version = "0.6.4-preview.41+0123456"
+        self.old_tag = f"preview-{SOURCE_OLD}"
+        self.initial = formula_for(self.old_version, SOURCE_OLD, self.old_tag)
+        self.formula.write_bytes(self.initial)
+        self.receipt_path = self.root / "release.json"
+        self.env = self.make_handoff()
+
+    def make_handoff(
+        self,
+        receipt: dict[str, Any] | None = None,
+        *,
+        digest_override: str | None = None,
+        version_override: str | None = None,
+        tag_override: str | None = None,
+        source_override: str | None = None,
+    ) -> dict[str, str]:
+        value = receipt or fixture_receipt()
+        raw = canonical(value)
+        self.receipt_path.write_bytes(raw)
+        plan_raw = canonical(fixture_plan(value["channel"], value["version"]["base"]))
+        self.plan_path.write_bytes(plan_raw)
+        return {
+            "VELNOR_TAP_BASE_SHA": "9" * 40,
+            "VELNOR_TAP_FORMULA_PATH": updater.FORMULA_PATHS[value["channel"]],
+            "VELNOR_TAP_RELEASE_PLAN": str(self.plan_path),
+            "VELNOR_TAP_RELEASE_PLAN_SHA256": sha256(plan_raw),
+            "VELNOR_TAP_RELEASE_RECEIPT": str(self.receipt_path),
+            "VELNOR_TAP_RELEASE_RECEIPT_SHA256": digest_override or sha256(raw),
+            "VELNOR_TAP_RELEASE_VERSION": version_override or value["version"]["value"],
+            "VELNOR_TAP_RELEASE_TAG": tag_override or value["tag"],
+            "VELNOR_TAP_SOURCE_SHA": source_override or value["source"]["commit_sha"],
+        }
+
+    def test_payload_targets_follow_native_publisher_lexical_order(self) -> None:
+        native_targets = {
+            "jackin": [
+                "aarch64-apple-darwin",
+                "aarch64-unknown-linux-gnu",
+                "x86_64-apple-darwin",
+                "x86_64-unknown-linux-gnu",
+            ],
+            "jackin-capsule": [
+                "aarch64-unknown-linux-gnu",
+                "x86_64-unknown-linux-gnu",
+            ],
+        }
+        self.assertEqual(
+            native_targets,
+            {product_id: list(targets) for product_id, (_, _, targets) in updater.PRODUCTS.items()},
+        )
+        fixture_products = {product["id"]: [payload["target"] for payload in product["payloads"]]
+                            for product in fixture_receipt()["products"]}
+        self.assertEqual(native_targets, fixture_products)
+
+    def run_updater(self, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        task_env = os.environ.copy()
+        for key in updater.ENVIRONMENT:
+            task_env.pop(key, None)
+        task_env.update(self.env if env is None else env)
+        return subprocess.run(
+            ["python", str(UPDATER)],
+            cwd=self.repo,
+            env=task_env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_version_grammar_rejects_unicode_decimal_digits(self) -> None:
+        base = "10.20.30"
+        version = f"{base}-preview.40+abcdef0"
+        self.assertIsNotNone(updater.SEMVER.fullmatch(base))
+        self.assertIsNotNone(updater.PREVIEW_VERSION.fullmatch(version))
+        for index in (1, 4, 7):
+            with self.subTest(base_index=index):
+                unicode_base = base[:index] + "٠" + base[index + 1 :]
+                self.assertIsNone(updater.SEMVER.fullmatch(unicode_base))
+                self.assertIsNone(updater.PREVIEW_VERSION.fullmatch(f"{unicode_base}-preview.40+abcdef0"))
+        self.assertIsNone(updater.PREVIEW_VERSION.fullmatch(f"{base}-preview.4٠+abcdef0"))
+
+    def test_updates_only_literal_metadata_and_retry_is_byte_identical(self) -> None:
+        result = self.run_updater()
+        self.assertEqual(0, result.returncode, result.stderr)
+        first = self.formula.read_bytes()
+        self.assertNotEqual(self.initial, first)
+        self.assertIn(f"# source-sha: {SOURCE_NEW}".encode(), first)
+        self.assertIn(b'version "0.6.4-preview.42+abcdef0"', first)
+        self.assertIn(f"releases/download/preview-{SOURCE_NEW}/".encode(), first)
+        assert_shared_formula_install(self, first)
+        actual_urls = re.findall(rb"releases/download/preview-[0-9a-f]{40}/([^\"]+)", first)
+        actual_hashes = re.findall(rb'^\s+sha256 "([0-9a-f]{64})"$', first, re.MULTILINE)
+        expected_hashes = {
+            asset["name"]: asset["sha256"]
+            for asset in fixture_receipt()["assets"]
+            if asset["kind"] == "payload"
+        }
+        self.assertEqual(6, len(actual_urls))
+        self.assertEqual(6, len(actual_hashes))
+        self.assertEqual(
+            expected_hashes,
+            {name.decode("ascii"): digest.decode("ascii") for name, digest in zip(actual_urls, actual_hashes, strict=True)},
+        )
+
+        # Only the literal metadata may change; all surrounding Ruby stays byte exact.
+        base_lines = self.initial.splitlines(keepends=True)
+        actual_lines = first.splitlines(keepends=True)
+        self.assertEqual(len(base_lines), len(actual_lines))
+        metadata_prefixes = (b"# source-sha: ", b"  version ", b"      url ", b"      sha256 ", b"    url ", b"    sha256 ")
+        for old, new in zip(base_lines, actual_lines, strict=True):
+            if not old.startswith(metadata_prefixes):
+                self.assertEqual(old, new)
+
+        retry = self.run_updater()
+        self.assertEqual(0, retry.returncode, retry.stderr)
+        self.assertEqual(first, self.formula.read_bytes())
+
+    def test_stable_updater_replaces_real_disabled_sentinel_and_preserves_formula_ruby(self) -> None:
+        self.formula = self.repo / updater.FORMULA_PATHS["stable"]
+        self.initial = STABLE_FORMULA.read_bytes()
+        self.formula.write_bytes(self.initial)
+        receipt = fixture_stable_receipt()
+        env = self.make_handoff(receipt=receipt)
+
+        result = self.run_updater(env)
+        self.assertEqual(0, result.returncode, result.stderr)
+        first = self.formula.read_bytes()
+        self.assertIn(f"# source-sha: {SOURCE_NEW}".encode(), first)
+        self.assertIn(b'  version "0.6.4"', first)
+        self.assertNotIn(b'  version "0.0.0"', first)
+        self.assertIn(b'if version.to_s == "0.0.0"', first)
+        assert_shared_formula_install(self, first)
+        self.assertEqual(6, len(re.findall(rb"releases/download/v0\.6\.4/", first)))
+        expected_hashes = {
+            asset["name"]: asset["sha256"] for asset in receipt["assets"] if asset["kind"] == "payload"
+        }
+        actual_urls = re.findall(rb'releases/download/v0\.6\.4/([^"]+)', first)
+        actual_hashes = re.findall(rb'^\s+sha256 "([0-9a-f]{64})"$', first, re.MULTILINE)
+        self.assertEqual(
+            expected_hashes,
+            {name.decode("ascii"): digest.decode("ascii") for name, digest in zip(actual_urls, actual_hashes, strict=True)},
+        )
+        base_lines = self.initial.splitlines(keepends=True)
+        actual_lines = first.splitlines(keepends=True)
+        self.assertEqual(len(base_lines), len(actual_lines))
+        metadata_prefixes = (
+            b"# source-sha: ", b"  version ", b"      url ", b"      sha256 ", b"    url ", b"    sha256 "
+        )
+        for old, new in zip(base_lines, actual_lines, strict=True):
+            if not old.startswith(metadata_prefixes):
+                self.assertEqual(old, new)
+
+        retry = self.run_updater(env)
+        self.assertEqual(0, retry.returncode, retry.stderr)
+        self.assertEqual(first, self.formula.read_bytes())
+
+        for candidate, reason in (
+            (fixture_stable_receipt(base="0.6.3"), "stable formula downgrade"),
+            (fixture_stable_receipt(source_sha=SOURCE_TAMPERED), "stable formula retry identity conflict"),
+        ):
+            with self.subTest(reason=reason):
+                rejected = self.run_updater(self.make_handoff(receipt=candidate))
+                self.assertNotEqual(0, rejected.returncode)
+                self.assertIn(reason, rejected.stderr)
+                self.assertEqual(first, self.formula.read_bytes())
+
+    def assert_rejected_without_formula_write(
+        self, env: dict[str, str] | None = None, reason: str | None = None
+    ) -> str:
+        result = self.run_updater(env)
+        self.assertNotEqual(0, result.returncode)
+        if reason is not None:
+            self.assertIn(reason, result.stderr)
+        self.assertEqual(self.initial, self.formula.read_bytes())
+        return result.stderr
+
+    def test_tampered_receipt_digest_and_handoff_identities_reject_without_write(self) -> None:
+        self.make_handoff()
+        self.receipt_path.write_bytes(self.receipt_path.read_bytes() + b" ")
+        self.assert_rejected_without_formula_write(reason="receipt digest mismatch")
+
+        for key, value, reason in (
+            ("VELNOR_TAP_RELEASE_VERSION", "0.6.4-preview.43+abcdef0", "handoff identity differs from receipt"),
+            ("VELNOR_TAP_RELEASE_TAG", "v0.6.4-preview.43+abcdef0", "handoff identity differs from receipt"),
+            ("VELNOR_TAP_SOURCE_SHA", SOURCE_TAMPERED, "handoff identity differs from receipt"),
+            ("VELNOR_TAP_BASE_SHA", "bad", "handoff digest or commit identity malformed"),
+            ("VELNOR_TAP_FORMULA_PATH", "Formula/evil.rb", "unexpected formula path"),
+        ):
+            with self.subTest(key=key):
+                env = self.make_handoff()
+                env[key] = value
+                self.assert_rejected_without_formula_write(env, reason)
+
+        for key in updater.ENVIRONMENT:
+            with self.subTest(missing=key):
+                env = self.make_handoff()
+                env.pop(key)
+                self.assert_rejected_without_formula_write(env, "missing Velnor handoff field")
+
+    def test_tampered_plan_digest_and_channel_destination_reject_without_write(self) -> None:
+        self.plan_path.write_bytes(self.plan_path.read_bytes() + b" ")
+        self.assert_rejected_without_formula_write()
+        env = self.make_handoff()
+        original = self.formula.read_bytes()
+        env["VELNOR_TAP_FORMULA_PATH"] = updater.FORMULA_PATHS["stable"]
+        result = self.run_updater(env)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("release channel formula destination mismatch", result.stderr)
+        self.assertEqual(original, self.formula.read_bytes())
+
+    def test_tampered_receipt_inventory_is_rejected_even_with_recomputed_handoff_digest(self) -> None:
+        for mutation in (
+            "missing-payload",
+            "wrong-target",
+            "duplicate-name",
+            "wrong-name-type",
+            "product-order",
+        ):
+            with self.subTest(mutation=mutation):
+                invalid = fixture_receipt(inventory_mutation=mutation)
+                env = self.make_handoff(invalid)
+                self.assert_rejected_without_formula_write(env)
+
+    def test_rejects_non_completion_producer_events_without_write(self) -> None:
+        for event in ("push", "pull_request", "workflow_dispatch", ""):
+            with self.subTest(event=event):
+                receipt = fixture_receipt()
+                receipt["source"]["event"] = event
+                self.assert_rejected_without_formula_write(self.make_handoff(receipt))
+
+    def test_preview_receipt_tag_binds_the_full_source_sha(self) -> None:
+        receipt = fixture_receipt()
+        receipt["tag"] = f"preview-{receipt['source']['commit_sha'][:7]}{'f' * 33}"
+        env = self.make_handoff(receipt)
+        self.assert_rejected_without_formula_write(env, "deterministic preview identity mismatch")
+
+    def test_preview_binds_source_and_workflow_authority_independently(self) -> None:
+        authority_sha = "fedcba9876543210fedcba9876543210fedcba98"
+        receipt = fixture_receipt(source_sha=SOURCE_NEW, authority_sha=authority_sha)
+        result = self.run_updater(self.make_handoff(receipt))
+        self.assertEqual(0, result.returncode, result.stderr)
+        updated = self.formula.read_bytes()
+        self.assertIn(f"# source-sha: {SOURCE_NEW}".encode(), updated)
+        self.assertIn(f"releases/download/preview-{SOURCE_NEW}/".encode(), updated)
+        self.initial = updated
+
+        for invalid_authority in (
+            authority_sha.upper(),
+            authority_sha[:-1],
+            "g" + authority_sha[1:],
+            42,
+        ):
+            with self.subTest(authority_sha=invalid_authority):
+                malformed = fixture_receipt(source_sha=SOURCE_NEW)
+                malformed["workflow"]["authority_sha"] = invalid_authority
+                env = self.make_handoff(malformed)
+                self.assert_rejected_without_formula_write(env, "workflow identity mismatch")
+
+    def test_stable_workflow_authority_must_equal_source_sha(self) -> None:
+        receipt = fixture_stable_receipt()
+        receipt["workflow"]["authority_sha"] = SOURCE_OLD
+        env = self.make_handoff(receipt)
+        self.assert_rejected_without_formula_write(env, "workflow identity mismatch")
+
+    def test_downgrade_and_conflicting_equal_version_retry_reject_without_write(self) -> None:
+        downgrade = fixture_receipt(count=40, source_sha=SOURCE_TAMPERED)
+        self.assert_rejected_without_formula_write(self.make_handoff(downgrade))
+
+        conflict = fixture_receipt(count=41, source_sha=SOURCE_NEW)
+        self.assert_rejected_without_formula_write(self.make_handoff(conflict))
+
+    def test_equal_preview_identity_cannot_replace_published_asset_digests(self) -> None:
+        first = self.run_updater()
+        self.assertEqual(0, first.returncode, first.stderr)
+        published = self.formula.read_bytes()
+        conflict = fixture_receipt()
+        next(asset for asset in conflict["assets"] if asset["kind"] == "payload")["sha256"] = "f" * 64
+        result = self.run_updater(self.make_handoff(conflict))
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("retry changes published formula metadata", result.stderr)
+        self.assertEqual(published, self.formula.read_bytes())
+
+    def test_malicious_formula_metadata_is_rejected_without_write(self) -> None:
+        malicious = self.initial.replace(
+            b'      url "https://github.com/jackin-project/jackin/releases/download/'
+            + self.old_tag.encode()
+            + b'/jackin-aarch64-apple-darwin.tar.gz"\n',
+            b'      url "https://github.com/jackin-project/jackin/releases/download/'
+            + self.old_tag.encode()
+            + b'/jackin-aarch64-apple-darwin.tar.gz"; system "curl evil"\n',
+            1,
+        )
+        self.formula.write_bytes(malicious)
+        self.initial = malicious
+        self.assert_rejected_without_formula_write()
+
+    def test_preview_formula_rejects_old_hardcoded_preview_tag(self) -> None:
+        rolling = self.initial.replace(
+            f"releases/download/{self.old_tag}/".encode(),
+            b"releases/download/preview/",
+        )
+        self.formula.write_bytes(rolling)
+        self.initial = rolling
+        self.assert_rejected_without_formula_write()
+
+    def test_stable_plan_updates_only_stable_formula_to_immutable_versioned_assets(self) -> None:
+        stable = fixture_receipt()
+        stable["channel"] = "stable"
+        stable["source"]["event"] = "workflow_dispatch"
+        stable["workflow"].update({
+            "path": ".github/workflows/binary-release.yml",
+            "signer_job_id": "stable-signer",
+            "signer_workflow": ".github/workflows/binary-release.yml",
+        })
+        stable["version"].update({"value": "0.6.4", "commit_count": None, "source_sha7": None})
+        stable["tag"] = "v0.6.4"
+        stable["evidence"]["signer_workflow_ref"] = "jackin-project/jackin/.github/workflows/binary-release.yml@refs/heads/main"
+        stable_plan = fixture_plan("stable")
+        plan_raw = canonical(stable_plan)
+        receipt_raw = canonical(stable)
+        stable_path = self.repo / updater.FORMULA_PATHS["stable"]
+        stable_path.write_bytes(formula_for("0.6.3", SOURCE_OLD, "v0.6.3"))
+        self.receipt_path.write_bytes(receipt_raw)
+        self.plan_path.write_bytes(plan_raw)
+        env = {
+            "VELNOR_TAP_BASE_SHA": "9" * 40,
+            "VELNOR_TAP_FORMULA_PATH": updater.FORMULA_PATHS["stable"],
+            "VELNOR_TAP_RELEASE_PLAN": str(self.plan_path),
+            "VELNOR_TAP_RELEASE_PLAN_SHA256": sha256(plan_raw),
+            "VELNOR_TAP_RELEASE_RECEIPT": str(self.receipt_path),
+            "VELNOR_TAP_RELEASE_RECEIPT_SHA256": sha256(receipt_raw),
+            "VELNOR_TAP_RELEASE_VERSION": "0.6.4",
+            "VELNOR_TAP_RELEASE_TAG": "v0.6.4",
+            "VELNOR_TAP_SOURCE_SHA": SOURCE_NEW,
+        }
+        result = self.run_updater(env)
+        self.assertEqual(0, result.returncode, result.stderr)
+        updated = stable_path.read_bytes()
+        self.assertIn(b'version "0.6.4"', updated)
+        self.assertIn(b"releases/download/v0.6.4/", updated)
+        self.assertEqual(self.initial, self.formula.read_bytes())
+
+        stable_path.write_bytes(formula_for("0.6.5", SOURCE_TAMPERED, "v0.6.5"))
+        rejected = self.run_updater(env)
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertIn(b'version "0.6.5"', stable_path.read_bytes())
+
+    def test_wrapper_executes_python_updater(self) -> None:
+        wrapper = self.repo / "scripts/package-update.sh"
+        result = subprocess.run([str(wrapper)], cwd=self.repo, env={**os.environ, **self.env}, check=False, capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn(b'version "0.6.4-preview.42+abcdef0"', self.formula.read_bytes())
+
+    def test_updater_has_no_network_archive_or_process_execution_surface(self) -> None:
+        tree = ast.parse(UPDATER.read_text(encoding="utf-8"))
+        forbidden_imports = {"http", "https", "urllib", "requests", "socket", "subprocess", "tarfile", "zipfile"}
+        imported = {
+            alias.name.split(".", maxsplit=1)[0]
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        }
+        imported.update(
+            node.module.split(".", maxsplit=1)[0]
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+        )
+        self.assertFalse(imported & forbidden_imports)
+        forbidden_calls = {"Popen", "system", "popen", "run", "check_call", "check_output"}
+        called = {
+            node.func.attr if isinstance(node.func, ast.Attribute) else node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and (isinstance(node.func, ast.Attribute) or isinstance(node.func, ast.Name))
+        }
+        self.assertFalse(called & forbidden_calls)
+
+
+class PackageUpdateDispatchTest(unittest.TestCase):
+    handoff_names = updater.ENVIRONMENT
+
+    def run_dispatch(self, mode: str) -> tuple[subprocess.CompletedProcess[str], set[str]]:
+        with tempfile.TemporaryDirectory(prefix="tap-dispatch-test-") as temporary:
+            root = Path(temporary)
+            scripts = root / "scripts"
+            scripts.mkdir()
+            shutil.copy2(SCRIPT, scripts / "package-update.sh")
+            marker_dir = root / "markers"
+            marker_dir.mkdir()
+            for filename, marker in (("test-package-update.sh", "tests"),):
+                target = scripts / filename
+                target.write_text(f"#!/bin/sh\n/usr/bin/touch '{marker_dir / marker}'\n", encoding="utf-8")
+                target.chmod(0o755)
+
+            subprocess.run(("git", "init", "-q", str(root)), check=True)
+            subprocess.run(("git", "-C", str(root), "config", "user.name", "Test"), check=True)
+            subprocess.run(("git", "-C", str(root), "config", "user.email", "test@example.invalid"), check=True)
+            subprocess.run(("git", "-C", str(root), "add", "."), check=True)
+            subprocess.run(("git", "-C", str(root), "commit", "-qm", "dispatch fixture"), check=True)
+            head = subprocess.run(
+                ("git", "-C", str(root), "rev-parse", "HEAD"),
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            owned_bin = root / "toolchain/owned/bin"
+            owned_bin.mkdir(parents=True)
+            fake_python = owned_bin / "python"
+            fake_python.write_text(
+                f"#!/bin/sh\n/usr/bin/touch '{marker_dir / 'updater'}'\n",
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o755)
+            env = {
+                "PATH": f"{owned_bin}:/usr/bin:/bin:/usr/sbin:/sbin",
+                "VELNOR_CHECK_ID": "homebrew-preview-update",
+                "VELNOR_CHECK_PLATFORM": "linux_x64",
+                "VELNOR_CHECK_HEAD": head,
+            }
+            if mode == "full":
+                env.update({name: f"fixture-{index}" for index, name in enumerate(self.handoff_names)})
+            elif mode == "partial":
+                env[self.handoff_names[0]] = "fixture-base-sha"
+            elif mode == "empty":
+                env[self.handoff_names[0]] = ""
+            elif mode == "invalid-head":
+                env["VELNOR_CHECK_HEAD"] = "f" * 40
+            elif mode == "missing-check-id":
+                env.pop("VELNOR_CHECK_ID")
+            elif mode == "wrong-check-id":
+                env["VELNOR_CHECK_ID"] = "another-check"
+            elif mode == "wrong-platform":
+                env["VELNOR_CHECK_PLATFORM"] = "macos_arm64"
+
+            result = subprocess.run(
+                (str(scripts / "package-update.sh"),),
+                cwd=root,
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            markers = {path.name for path in marker_dir.iterdir()}
+            return result, markers
+
+    def test_ordinary_exact_head_check_runs_updater_regression_tests(self) -> None:
+        result, markers = self.run_dispatch("check")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual({"tests"}, markers)
+
+    def test_complete_handoff_dispatches_to_authenticated_updater(self) -> None:
+        result, markers = self.run_dispatch("full")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual({"updater"}, markers)
+
+    def test_partial_and_empty_handoffs_fail_before_any_child_runs(self) -> None:
+        for mode in ("partial", "empty"):
+            with self.subTest(mode=mode):
+                result, markers = self.run_dispatch(mode)
+                self.assertEqual(2, result.returncode)
+                self.assertEqual(set(), markers)
+
+    def test_invalid_native_context_fails_before_any_child_runs(self) -> None:
+        for mode in ("invalid-head", "missing-check-id", "wrong-check-id", "wrong-platform"):
+            with self.subTest(mode=mode):
+                result, markers = self.run_dispatch(mode)
+                self.assertEqual(2, result.returncode)
+                self.assertEqual(set(), markers)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
