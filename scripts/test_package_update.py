@@ -248,6 +248,28 @@ class PreviewUpdaterTest(unittest.TestCase):
         self.receipt_path = self.root / "release.json"
         self.env = self.make_handoff()
 
+    def test_tracked_git_tree_contains_only_regular_file_modes(self) -> None:
+        result = subprocess.run(
+            ["git", "ls-files", "--stage", "-z"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+        )
+        records = result.stdout.split(b"\0")
+        self.assertEqual(b"", records.pop())
+        self.assertTrue(records)
+
+        for record in records:
+            metadata, separator, path = record.partition(b"\t")
+            self.assertEqual(b"\t", separator, msg=repr(record))
+            mode, _object_id, stage = metadata.split()
+            self.assertEqual(b"0", stage, msg=f"{path!r} has index stage {stage!r}")
+            self.assertIn(
+                mode,
+                {b"100644", b"100755"},
+                msg=f"{path!r} has non-regular Git mode {mode!r}",
+            )
+
     def make_handoff(
         self,
         receipt: dict[str, Any] | None = None,
