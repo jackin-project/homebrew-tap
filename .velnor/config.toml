@@ -1,4 +1,4 @@
-schema = 2
+schema = 1
 
 [workflow]
 name = "CI"
@@ -6,8 +6,6 @@ policy = "consumer-v1"
 default_branch = "main"
 generator_validation = "bootstrap"
 max_parallel_jobs = 2
-pull_request_cache_policy = "read-only"
-runner_label = "ubuntu-26.04"
 
 [workflow.review_completion]
 provider = "codex-v1"
@@ -23,102 +21,28 @@ test_process_budget = 2
 [test_sharding]
 default_shards = 1
 
-[test_sharding.by_manifest]
-
 [stacks]
 ignore = []
 
 [discovery]
 exclude = []
 
-[actions.overrides]
-
-[execution]
-default_profile = "hosted"
-hosted_profile = "hosted"
-scale_set_profile = "local"
-
-[execution.profiles.hosted]
-kind = "github-hosted"
-label = "ubuntu-26.04"
-platform = "linux/amd64"
-
-[execution.profiles.local]
-kind = "github-scale-set"
-name = "ubuntu-26.04-scale-set"
-labels = ["velnor", "ubuntu-26.04-scale-set"]
-platform = "linux/amd64"
-
-[[checks]]
-id = "homebrew-preview-install"
-task = "homebrew-preview-install-test"
-directory = "."
-inputs = [".velnor/config.toml", "Formula/jackin-preview.rb", "lib/jackin_formula_support.rb", "mise.lock", "mise.toml", "scripts/homebrew_install_policy.py", "scripts/test-homebrew-install.sh", "scripts/test_homebrew_formulary_keg.rb", "scripts/test_homebrew_install_policy.py"]
-tools = ["python"]
+[[native_checks]]
+id = "tap_tree"
+operation = "tap_tree"
 timeout_minutes = 5
 
-[checks.runner]
-label = "macos-26"
-platform = "macos_arm64"
-executor = "hosted"
-
-[[checks]]
-id = "homebrew-preview-update"
-task = "package-update"
-directory = "."
-inputs = [".velnor/config.toml", "Formula/jackin-preview.rb", "Formula/jackin.rb", "lib/jackin_formula_support.rb", "mise.lock", "mise.toml", "scripts/homebrew_install_policy.py", "scripts/package-update.py", "scripts/package-update.sh", "scripts/package_update_validation.py", "scripts/test-homebrew-install.sh", "scripts/test-package-update.sh", "scripts/test_homebrew_formulary_keg.rb", "scripts/test_homebrew_install_policy.py", "scripts/test_package_update.py"]
-tools = ["python"]
-timeout_minutes = 5
-
-[checks.runner]
+[native_checks.runner]
 label = "ubuntu-26.04"
 platform = "linux_x64"
 executor = "hosted"
 
-[[qualified_tools]]
-id = "python"
-version = "3.15.0"
-depends_on = []
+[[native_checks]]
+id = "adoption_contract"
+operation = "adoption_contract"
+timeout_minutes = 5
 
-[qualified_tools.backend]
-kind = "core"
-tool = "python"
-
-[qualified_tools.options]
-kind = "default"
-
-[[qualified_tools.platforms]]
+[native_checks.runner]
+label = "ubuntu-26.04"
 platform = "linux_x64"
-dependency_artifacts = []
-install_tree_sha256 = "ba01550e115dc0e4a21e19e43b3db2e6f4ff6759b3a6030be9cd84cbd042bb31"
-
-[[qualified_tools.platforms.artifacts]]
-url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261013/cpython-3.15.0%2B20261013-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
-sha256 = "69740dcd9b3480b3d53760f2d3b75582adb14fa54434628dea32480ddede542a"
-
-[[qualified_tools.platforms.executables]]
-name = "python"
-path = "bin/python3.15"
-sha256 = "610b28e9e2a4c0dc26e80c0f2b4f9601c379b955cce23755a75212fa984d36ce"
-
-[qualified_tools.platforms.executables.probe]
-kind = "version"
-expected = "Python 3.15.0"
-
-[[qualified_tools.platforms]]
-platform = "macos_arm64"
-dependency_artifacts = []
-install_tree_sha256 = "0b6728b5198f23c0360889b53e866d7655b81356f75e881c065a46847edffa24"
-
-[[qualified_tools.platforms.artifacts]]
-url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261013/cpython-3.15.0%2B20261013-aarch64-apple-darwin-install_only_stripped.tar.gz"
-sha256 = "b4ab2009803cef142e4ebf2ebef225f6875f83cc35caf4eefb437aa9b2b76783"
-
-[[qualified_tools.platforms.executables]]
-name = "python"
-path = "bin/python3.15"
-sha256 = "a01000a3297c2c0d7c6e2d1329e329e674f228622cd51ad634504c6b789320e0"
-
-[qualified_tools.platforms.executables.probe]
-kind = "version"
-expected = "Python 3.15.0"
+executor = "hosted"
